@@ -5,6 +5,7 @@ import com.ftbtranslator.core.api.PromptBuilder;
 import com.ftbtranslator.core.api.TranslationClientFactory;
 import com.ftbtranslator.core.bundle.TranslationBundleManager;
 import com.ftbtranslator.core.cache.TranslationCache;
+import com.ftbtranslator.core.cache.TranslationGlossary;
 import com.ftbtranslator.core.pack.ResourcePackGenerator;
 import com.ftbtranslator.core.parser.FtbQuestsTranslator;
 import com.ftbtranslator.core.parser.JarModExtractor;
@@ -48,6 +49,8 @@ import java.util.function.Consumer;
 public final class TranslationService {
 
     private static final int MAX_CONSECUTIVE_BATCH_FAILURES = 5;
+    /** Maximum glossary terms injected into the system prompt of a single batch. */
+    static final int MAX_GLOSSARY_TERMS_PER_BATCH = 25;
 
     private final GamePaths paths;
     private final TokenMasker tokenMasker = new TokenMasker();
@@ -168,6 +171,7 @@ public final class TranslationService {
         int tasksWritten = 0;
         int stringsTranslated = 0;
         int stringsFromCache = 0;
+        int stringsFromGlossary = 0;
         int stringsFailed = 0;
         boolean questsChanged = false;
         boolean resourcePackChanged = false;
@@ -181,6 +185,7 @@ public final class TranslationService {
                 config.getContextPreset(),
                 config.getCustomContext());
         activeCache.set(cache);
+        TranslationGlossary glossary = new TranslationGlossary();
 
         try {
             if (scopes.isEmpty()) {
@@ -206,11 +211,15 @@ public final class TranslationService {
 
             cache.load();
 
-            // Index mod jars once so KubeJS and Mods can share en_us/pt_br keys without duplicate translations
-            Map<String, JarModExtractor.NamespaceLangAccumulator> jarIndex = Map.of();
-            if (scopes.contains(TranslationScope.MODS) || scopes.contains(TranslationScope.KUBEJS)) {
-                token.checkpoint();
-                jarIndex = JarModExtractor.indexModJars(paths, config, callback);
+            // Index mod jars once so KubeJS and Mods can share en_us/pt_br keys without duplicate translations.
+            // Always indexed: the official pt_br files shipped inside the jars feed the human-made glossary
+            // that every front (Quests, KubeJS, Patchouli, Mods) reuses before spending AI tokens.
+            token.checkpoint();
+            Map<String, JarModExtractor.NamespaceLangAccumulator> jarIndex =
+                    JarModExtractor.indexModJars(paths, config, glossary, callback);
+            if (!glossary.isEmpty()) {
+                log(callback, LogLevel.INFO, "Glossário oficial: " + glossary.size()
+                        + " termo(s) com tradução humana encontrados nos mods.");
             }
 
             // Phase 1: Scan enabled fronts in priority order (FTB Quests -> KubeJS -> Patchouli -> Mods)
@@ -250,6 +259,7 @@ public final class TranslationService {
             Map<String, MaskedText> toTranslate = new LinkedHashMap<>();
             Map<String, List<Map.Entry<String, MaskedText>>> originalsByTemplate = new LinkedHashMap<>();
             taskCompleted = new boolean[tasks.size()];
+            int[] glossaryHits = {0};
 
             for (PendingOutputTask task : tasks) {
                 Set<String> pendingForTask = new LinkedHashSet<>();
@@ -269,6 +279,12 @@ public final class TranslationService {
                     MaskedText masked = tokenMasker.mask(s);
                     if (!masked.hasTranslatableContent()) {
                         resolvedTranslations.put(s, s);
+                        return;
+                    }
+                    String human = glossary.lookup(s);
+                    if (human != null && placeholdersMatch(masked, human)) {
+                        resolvedTranslations.put(s, human);
+                        glossaryHits[0]++;
                         return;
                     }
                     String templateKey = masked.masked();
@@ -299,6 +315,7 @@ public final class TranslationService {
             }
 
             stringsFromCache = resolvedTranslations.size();
+            stringsFromGlossary = glossaryHits[0];
 
             // Immediately write any tasks whose strings were 100% resolved from cache or pre-translated
             for (int tIdx = 0; tIdx < tasks.size(); tIdx++) {
@@ -326,6 +343,7 @@ public final class TranslationService {
 
             log(callback, LogLevel.INFO, "Strings únicas: " + uniqueStrings.size()
                     + " | Já resolvidas/Cache: " + stringsFromCache
+                    + (stringsFromGlossary > 0 ? " (glossário oficial: " + stringsFromGlossary + ")" : "")
                     + " | Templates p/ traduzir: " + stringsTotal + " em " + batchTotal + " lote(s).");
 
             // Phase 2: Translate uncached batches with AI and flush completed files after every batch
@@ -346,10 +364,17 @@ public final class TranslationService {
                             stringsTranslated + stringsFailed, stringsFromCache, stringsFailed,
                             tasksTotal, tasksWritten, true, token.isPaused()));
 
+                    List<String> batchTexts = new ArrayList<>(batchEntries.size());
+                    for (Map.Entry<String, MaskedText> be : batchEntries) {
+                        batchTexts.add(be.getValue().masked());
+                    }
+                    String batchPrompt = PromptBuilder.withGlossary(systemPrompt,
+                            glossary.termsFor(batchTexts, MAX_GLOSSARY_TERMS_PER_BATCH));
+
                     Map<String, String> responseMap;
                     try {
                         responseMap = translateBatchResilient(
-                                client, batchEntries, systemPrompt, token, callback);
+                                client, batchEntries, batchPrompt, token, callback);
                         consecutiveBatchFailures = 0;
                     } catch (IOException batchEx) {
                         String errMsg = batchEx.getMessage() == null ? "" : batchEx.getMessage();
@@ -655,8 +680,34 @@ public final class TranslationService {
         return TranslationBundleManager.exportBundle(paths, targetLanguage);
     }
 
+    /**
+     * Imports a translation bundle. Refused while a translation is running: the running job keeps its own
+     * in-memory cache and its next flush would overwrite the merged cache file, silently losing the import.
+     * The run slot is held during the import so a translation cannot start halfway through it either.
+     */
     public TranslationBundleManager.ImportResult importBundle(String targetLanguage) throws IOException {
-        return TranslationBundleManager.importBundle(paths, targetLanguage);
+        CancellationToken importGuard = new CancellationToken();
+        if (!activeToken.compareAndSet(null, importGuard)) {
+            throw new IOException("Não é possível importar enquanto uma tradução está em andamento. "
+                    + "Aguarde terminar ou cancele a tradução e tente novamente.");
+        }
+        try {
+            return TranslationBundleManager.importBundle(paths, targetLanguage);
+        } finally {
+            activeToken.compareAndSet(importGuard, null);
+        }
+    }
+
+    /**
+     * True when {@code translation} carries exactly the same protected tokens (placeholders, formatting
+     * codes...) as the source, in any order, so a human translation never breaks a {@code %s} or {@code §a}.
+     */
+    private boolean placeholdersMatch(MaskedText source, String translation) {
+        List<String> expected = new ArrayList<>(source.tokens());
+        List<String> actual = new ArrayList<>(tokenMasker.mask(translation).tokens());
+        Collections.sort(expected);
+        Collections.sort(actual);
+        return expected.equals(actual);
     }
 
     /**

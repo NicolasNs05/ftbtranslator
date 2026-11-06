@@ -4,6 +4,7 @@ import com.ftbtranslator.core.api.GeminiTranslationClient;
 import com.ftbtranslator.core.api.RateLimiter;
 import com.ftbtranslator.core.bundle.TranslationBundleManager;
 import com.ftbtranslator.core.cache.TranslationCache;
+import com.ftbtranslator.core.cache.TranslationGlossary;
 import com.ftbtranslator.core.pack.ResourcePackGenerator;
 import com.ftbtranslator.core.parser.PatchouliTranslator;
 import com.ftbtranslator.core.parser.SnbtParser;
@@ -22,10 +23,15 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -40,6 +46,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *   <li>Per-batch SHA-256 cache persistence + {@code pack.mcmeta} ({@code pack_format: 34})</li>
  *   <li>{@link TranslationBundleManager} export & import round-trip</li>
  *   <li>Automatic Tensura modpack detection + Gemini multi-model fallback on HTTP 503</li>
+ *   <li>Official mod translations reused as a glossary (exact match + prompt terms) and import guard</li>
  * </ul>
  */
 class EndToEndCoreTest {
@@ -515,6 +522,187 @@ class EndToEndCoreTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void glossaryVotesSkipsUntranslatedCopiesAndFindsTermsInsideTexts() {
+        TranslationGlossary glossary = new TranslationGlossary();
+
+        // Two mods agree on "Energia", one disagrees: majority wins.
+        assertEquals(2, glossary.addLangPair(
+                Map.of("a", "Energy", "b", "Iron Plate"),
+                Map.of("a", "Energia", "b", "Placa de Ferro")));
+        glossary.addLangPair(Map.of("a", "Energy", "x", "Copper"), Map.of("a", "Energia", "x", "Cobre"));
+        glossary.addLangPair(Map.of("a", "Energy", "x", "Tin"), Map.of("a", "Energía", "x", "Estanho"));
+        assertEquals("Energia", glossary.lookup("Energy"));
+        assertEquals("Placa de Ferro", glossary.lookup("Iron Plate"));
+        assertNull(glossary.lookup("Unknown"));
+
+        // A pt_br file that is just a copy of en_us is not a human translation: ignored entirely.
+        assertEquals(0, glossary.addLangPair(
+                Map.of("a", "Steel Gear", "b", "Steel Rod", "c", "Gold"),
+                Map.of("a", "Steel Gear", "b", "Steel Rod", "c", "Ouro")));
+        assertNull(glossary.lookup("Gold"));
+
+        // Terms are found as whole words, case-insensitive, never as the whole text itself.
+        Map<String, String> terms = glossary.termsFor(
+                List.of("Craft an iron plate using __TK0__ energy", "Iron Plate", "Ironplated"), 10);
+        assertEquals(Map.of("Iron Plate", "Placa de Ferro", "Energy", "Energia"), terms);
+        assertEquals(List.of("Iron Plate", "Energy"), new ArrayList<>(terms.keySet()));
+        assertEquals(1, glossary.termsFor(List.of("iron plate and energy"), 1).size());
+    }
+
+    @Test
+    void officialModTranslationsResolveOtherFrontsWithoutAiAndFeedThePrompt(@TempDir Path tempRoot) throws Exception {
+        Path instance = tempRoot.resolve("instance");
+        Path questsLangDir = instance.resolve("config/ftbquests/quests/lang");
+        Files.createDirectories(questsLangDir);
+        Files.writeString(questsLangDir.resolve("en_us.snbt"), """
+                {
+                    quest.power.title: "Energy"
+                    quest.power.desc: "Craft an Iron Plate"
+                    quest.power.stored: "Stored: %s FE"
+                }
+                """, StandardCharsets.UTF_8);
+
+        Path modsDir = instance.resolve("mods");
+        Files.createDirectories(modsDir);
+        try (OutputStream fos = Files.newOutputStream(modsDir.resolve("techmod.jar"));
+             ZipOutputStream zos = new ZipOutputStream(fos)) {
+            writeZipText(zos, "assets/techmod/lang/en_us.json", """
+                    {
+                      "gui.techmod.energy": "Energy",
+                      "item.techmod.iron_plate": "Iron Plate",
+                      "gui.techmod.stored": "Stored: %s FE"
+                    }
+                    """);
+            // Official human translation; the "stored" one dropped its %s and must not be trusted.
+            writeZipText(zos, "assets/techmod/lang/pt_br.json", """
+                    {
+                      "gui.techmod.energy": "Energia",
+                      "item.techmod.iron_plate": "Placa de Ferro",
+                      "gui.techmod.stored": "Armazenado FE"
+                    }
+                    """);
+        }
+
+        List<String> systemPrompts = Collections.synchronizedList(new ArrayList<>());
+        List<String> sentTexts = Collections.synchronizedList(new ArrayList<>());
+        HttpServer server = mockOpenAiServer(systemPrompts, sentTexts, null);
+        server.start();
+        try {
+            TranslatorConfigData cfg = mockConfig(server);
+            TranslationService service = new TranslationService(instance);
+            TranslationReport report = service.runSynchronously(
+                    cfg, EnumSet.of(TranslationScope.FTBQUESTS), null);
+            assertTrue(report.success(), report.message());
+
+            String ptBr = Files.readString(questsLangDir.resolve("pt_br.snbt"), StandardCharsets.UTF_8);
+            assertTrue(ptBr.contains("\"Energia\""), ptBr);
+            assertTrue(ptBr.contains("[PT-BR] Craft an Iron Plate"), ptBr);
+            assertTrue(ptBr.contains("[PT-BR] Stored: %s FE"), ptBr);
+
+            // "Energy" was resolved by the glossary: never sent to the AI.
+            assertFalse(sentTexts.contains("Energy"), sentTexts.toString());
+            assertTrue(sentTexts.contains("Craft an Iron Plate"), sentTexts.toString());
+
+            // The human term reached the prompt of the batch that mentions it.
+            assertFalse(systemPrompts.isEmpty());
+            assertTrue(systemPrompts.stream().anyMatch(p -> p.contains("Iron Plate = Placa de Ferro")),
+                    systemPrompts.toString());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void importBundleIsRefusedWhileTranslationIsRunning(@TempDir Path tempRoot) throws Exception {
+        Path instance = tempRoot.resolve("instance");
+        Path kubeLangDir = instance.resolve("kubejs/assets/kubejs/lang");
+        Files.createDirectories(kubeLangDir);
+        Files.writeString(kubeLangDir.resolve("en_us.json"), """
+                { "item.kubejs.gem": "Shiny Gem" }
+                """, StandardCharsets.UTF_8);
+
+        CountDownLatch requestArrived = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        HttpServer server = mockOpenAiServer(
+                Collections.synchronizedList(new ArrayList<>()),
+                Collections.synchronizedList(new ArrayList<>()),
+                () -> {
+                    requestArrived.countDown();
+                    try {
+                        release.await(10, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+        server.start();
+        try {
+            TranslationService service = new TranslationService(instance);
+            CompletableFuture<TranslationReport> run = service.startAsync(
+                    mockConfig(server), EnumSet.of(TranslationScope.KUBEJS), null);
+            assertTrue(requestArrived.await(10, TimeUnit.SECONDS), "translation never reached the AI");
+
+            IOException refused = assertThrows(IOException.class, () -> service.importBundle("pt_br"));
+            assertTrue(refused.getMessage().contains("tradução está em andamento"), refused.getMessage());
+
+            release.countDown();
+            assertTrue(run.get(10, TimeUnit.SECONDS).success());
+
+            // Once the run is over the guard is released (missing bundle is the expected error now).
+            IOException afterRun = assertThrows(IOException.class, () -> service.importBundle("pt_br"));
+            assertFalse(afterRun.getMessage().contains("tradução está em andamento"), afterRun.getMessage());
+        } finally {
+            release.countDown();
+            server.stop(0);
+        }
+    }
+
+    private static TranslatorConfigData mockConfig(HttpServer server) {
+        TranslatorConfigData cfg = new TranslatorConfigData();
+        cfg.setProvider(ProviderType.OLLAMA);
+        cfg.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1");
+        cfg.setModel("mock-translator");
+        cfg.setRequestsPerMinute(600);
+        return cfg;
+    }
+
+    /** OpenAI-compatible mock that prefixes every value with "[PT-BR] " and records what it received. */
+    private static HttpServer mockOpenAiServer(List<String> systemPrompts, List<String> sentTexts,
+                                               Runnable beforeReply) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            String reqBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            com.google.gson.JsonArray messages = JsonParser.parseString(reqBody).getAsJsonObject()
+                    .getAsJsonArray("messages");
+            systemPrompts.add(messages.get(0).getAsJsonObject().get("content").getAsString());
+            JsonObject inputMap = JsonParser.parseString(
+                    messages.get(1).getAsJsonObject().get("content").getAsString()).getAsJsonObject();
+            JsonObject translatedMap = new JsonObject();
+            for (Map.Entry<String, JsonElement> e : inputMap.entrySet()) {
+                sentTexts.add(e.getValue().getAsString());
+                translatedMap.addProperty(e.getKey(), "[PT-BR] " + e.getValue().getAsString());
+            }
+            if (beforeReply != null) {
+                beforeReply.run();
+            }
+            JsonObject msg = new JsonObject();
+            msg.addProperty("role", "assistant");
+            msg.addProperty("content", translatedMap.toString());
+            JsonObject choice = new JsonObject();
+            choice.add("message", msg);
+            com.google.gson.JsonArray choices = new com.google.gson.JsonArray();
+            choices.add(choice);
+            JsonObject resp = new JsonObject();
+            resp.add("choices", choices);
+            byte[] bytes = resp.toString().getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        return server;
     }
 
     private static void writeZipText(ZipOutputStream zos, String name, String content) throws IOException {

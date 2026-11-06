@@ -99,7 +99,8 @@ ftbtranslator/
 │   │   ├── bundle/
 │   │   │   └── TranslationBundleManager.java # Export/Import .zip anti-ZipSlip
 │   │   ├── cache/
-│   │   │   └── TranslationCache.java      # Cache SHA-256 contextual + flush
+│   │   │   ├── TranslationCache.java      # Cache SHA-256 contextual + flush
+│   │   │   └── TranslationGlossary.java   # Glossário de traduções oficiais
 │   │   ├── pack/
 │   │   │   └── ResourcePackGenerator.java # Gerador pack.mcmeta (format 15..99)
 │   │   ├── parser/
@@ -250,4 +251,6 @@ Antes de qualquer string ser enviada para a IA, [`TokenMasker.mask(String)`](src
 * Reestruturação visual da [`TranslatorDashboardScreen`](src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java) com foco em usabilidade imediata e adição de **Tooltips explicativos ao passar o mouse (*Hover Tooltips*)** sobre cada opção (`FTB Quests`, `KubeJS`, `Mods .jar`, `Patchouli`, `Delta Translation`, `Contexto`), explicando em linguagem simples e acessível o que cada tecnologia representa dentro do jogo para que jogadores sem conhecimento técnico saibam exatamente o que selecionar.
 
 ### 8.2. Motor de Cache de Segunda Geração e Otimização Extrema de Tokens
+* **Implementado — Glossário Oficial:** os `pt_br.json` que os próprios mods já trazem (tradução humana) alimentam o [`TranslationGlossary`](src/core/java/com/ftbtranslator/core/cache/TranslationGlossary.java). Textos idênticos em qualquer frente são resolvidos sem IA (validando placeholders), e termos curtos encontrados no lote são injetados no prompt para manter a terminologia oficial. Arquivos `pt_br` que são só cópia do `en_us` são ignorados; divergências são resolvidas por votação.
+* **Implementado — Import seguro:** importar um bundle `.zip` é recusado enquanto uma tradução está rodando, evitando que o flush do cache em memória sobrescreva o cache importado.
 * Pesquisa e implementação de técnicas avançadas de aproveitamento de cache — incluindo pré-aquecimento de dicionários com termos recorrentes de mods de Minecraft, compressão de payload JSON em trânsito e armazenamento incremental — visando reduzir ainda mais o consumo de tokens de IA e acelerar drasticamente a primeira tradução de modpacks gigantes.

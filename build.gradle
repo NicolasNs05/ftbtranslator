@@ -1,0 +1,142 @@
+plugins {
+    id 'java-library'
+    id 'idea'
+    id 'net.neoforged.moddev' version '2.0.148'
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = mod_id
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+repositories {
+    mavenCentral()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Multi-loader architecture:
+//  * sourceSet "core"     -> 100% pure Java 21 + Gson. Minecraft / NeoForge are NOT on its classpath,
+//                            so any accidental import of net.minecraft / com.mojang / net.neoforged
+//                            fails at compile time. This layer can be reused verbatim by Fabric/Forge.
+//  * sourceSet "coreTest" -> JUnit 5 tests that validate the core end-to-end (no game required).
+//  * sourceSet "main"     -> NeoForge 1.21.1 adapter (config, commands, keybinds, screens, pack reload).
+// ---------------------------------------------------------------------------------------------
+sourceSets {
+    core {
+        java.srcDir 'src/core/java'
+    }
+    coreTest {
+        java.srcDir 'src/coreTest/java'
+        compileClasspath += sourceSets.core.output
+        runtimeClasspath += sourceSets.core.output
+    }
+    main {
+        compileClasspath += sourceSets.core.output
+        runtimeClasspath += sourceSets.core.output
+    }
+}
+
+configurations {
+    coreTestImplementation.extendsFrom coreCompileOnly
+    coreTestRuntimeOnly.extendsFrom coreCompileOnly
+}
+
+dependencies {
+    coreCompileOnly "com.google.code.gson:gson:${gson_version}"
+
+    coreTestImplementation platform("org.junit:junit-bom:${junit_version}")
+    coreTestImplementation 'org.junit.jupiter:junit-jupiter'
+    coreTestRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+neoForge {
+    version = project.neo_version
+
+    parchment {
+        mappingsVersion = project.parchment_mappings_version
+        minecraftVersion = project.parchment_minecraft_version
+    }
+
+    runs {
+        client {
+            client()
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+            sourceSet(sourceSets.core)
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+// Expands ${...} placeholders of neoforge.mods.toml from gradle.properties.
+tasks.named('processResources', ProcessResources).configure {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            neo_version_range      : neo_version_range,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_description        : mod_description
+    ]
+    inputs.properties replaceProperties
+    filesMatching(['META-INF/neoforge.mods.toml']) {
+        expand replaceProperties
+    }
+}
+
+// The final mod jar ships both layers (core + neoforge adapter).
+tasks.named('jar', Jar).configure {
+    from sourceSets.core.output
+    manifest {
+        attributes([
+                'Specification-Title'     : mod_id,
+                'Specification-Version'   : mod_version,
+                'Implementation-Title'    : mod_name,
+                'Implementation-Version'  : mod_version
+        ])
+    }
+}
+
+tasks.register('coreTest', Test) {
+    description = 'Runs the pure-Java core test suite (no Minecraft required).'
+    group = 'verification'
+    testClassesDirs = sourceSets.coreTest.output.classesDirs
+    classpath = sourceSets.coreTest.runtimeClasspath
+    useJUnitPlatform()
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        exceptionFormat 'full'
+        showStandardStreams = false
+    }
+}
+
+tasks.named('check') {
+    dependsOn 'coreTest'
+}
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
+}

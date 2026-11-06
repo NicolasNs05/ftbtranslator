@@ -1,0 +1,48 @@
+# ========================================================
+# Git Ignore - Universal Modpack & Quests Auto-Translator
+# ========================================================
+
+# --- Gradle & Build Outputs ---
+.gradle/
+build/
+out/
+bin/
+
+# --- Minecraft NeoForge Runtime Directories & Logs ---
+run/
+runs/
+logs/
+*.log
+
+# --- IDEs & Code Editors ---
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Eclipse
+.settings/
+.project
+.classpath
+
+# VS Code
+.vscode/
+
+# --- Operating System Files ---
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Translation Caches, Runtime Dumps & Exports ---
+cache_*.json
+generated_files.json
+exports/
+*.zip
+
+# --- Local secrets & config overrides ---
+local.properties
+*.key
+*.token
+credentials*.json

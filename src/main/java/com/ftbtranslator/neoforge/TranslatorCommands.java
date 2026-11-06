@@ -105,7 +105,9 @@ public final class TranslatorCommands {
         int pct = (int) Math.round(s.fraction() * 100.0);
         String msg = "§a[FTB Auto-Translator] §fFase: §b" + s.phase()
                 + " §7(" + pct + "%) §f| Lote: §e" + s.batchIndex() + "/" + s.batchTotal()
-                + " §f| Cache: §a" + s.stringsFromCache()
+                + " §f| Cache: §a" + s.stringsFromCacheOnly()
+                + " §f| Glossário: §a" + s.stringsFromGlossary()
+                + " §f| IA: §e" + s.stringsTranslatedByAi()
                 + " §f| Arquivos: §b" + s.tasksWritten() + "/" + s.tasksTotal()
                 + (s.currentItem().isEmpty() ? "" : " §7(" + s.currentItem() + ")");
         source.sendSuccess(() -> Component.literal(msg), false);

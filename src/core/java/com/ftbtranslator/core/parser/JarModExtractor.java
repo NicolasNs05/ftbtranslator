@@ -225,6 +225,65 @@ public final class JarModExtractor {
         return tasks;
     }
 
+    /** A mod jar and the language namespaces it ships (top-level {@code assets/<ns>/lang/}). */
+    public record ModJarInfo(String jarFileNameLower, Set<String> namespaces) {
+    }
+
+    /**
+     * Lists the jars in {@code mods/} with their lang namespaces, reading only the zip directory (no
+     * decompression), so a UI can count filter matches on every keystroke without touching the disk again.
+     */
+    public static List<ModJarInfo> listModJars(GamePaths paths) throws IOException {
+        Path modsDir = paths.modsDir();
+        List<ModJarInfo> result = new ArrayList<>();
+        if (!Files.isDirectory(modsDir)) {
+            return result;
+        }
+        List<Path> jars;
+        try (Stream<Path> s = Files.list(modsDir)) {
+            jars = s.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar"))
+                    .sorted(Comparator.comparing(Path::toString))
+                    .toList();
+        }
+        for (Path jar : jars) {
+            String name = jar.getFileName().toString().toLowerCase(Locale.ROOT);
+            if (name.startsWith("ftbtranslator")) {
+                continue;
+            }
+            Set<String> namespaces = new LinkedHashSet<>();
+            try (ZipFile zip = new ZipFile(jar.toFile())) {
+                namespaces.addAll(indexLangEntries(zip, null).keySet());
+            } catch (IOException | RuntimeException ignored) {
+                // Unreadable jar: still counted by its file name.
+            }
+            result.add(new ModJarInfo(name, Set.copyOf(namespaces)));
+        }
+        return result;
+    }
+
+    /**
+     * Counts jars selected by the mod filter, using the same rule as the translation run: a jar matches
+     * when its file name or any of its namespaces contains a filter token. An empty filter selects all.
+     */
+    public static int countMatchingJars(List<ModJarInfo> jars, List<String> filterTokens) {
+        int count = 0;
+        for (ModJarInfo jar : jars) {
+            if (filterTokens == null || filterTokens.isEmpty()
+                    || matchesFilter(filterTokens, jar.jarFileNameLower(), "")) {
+                count++;
+                continue;
+            }
+            for (String ns : jar.namespaces()) {
+                if (matchesFilter(filterTokens, jar.jarFileNameLower(), ns)) {
+                    count++;
+                    break;
+                }
+            }
+        }
+        return count;
+    }
+
     public static boolean matchesFilter(List<String> filterTokens, String jarFileNameLower, String namespaceLower) {
         if (filterTokens == null || filterTokens.isEmpty()) {
             return true;

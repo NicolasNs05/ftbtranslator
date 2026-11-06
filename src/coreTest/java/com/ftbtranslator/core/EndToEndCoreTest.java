@@ -174,6 +174,7 @@ class EndToEndCoreTest {
             cfg.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1beta");
             cfg.setMaxRetries(1);
             cfg.setRequestsPerMinute(600);
+            cfg.setAutoRateLimit(false);
 
             GeminiTranslationClient client = new GeminiTranslationClient(cfg, new RateLimiter(600), null);
             Map<String, String> batch = new LinkedHashMap<>();
@@ -445,6 +446,7 @@ class EndToEndCoreTest {
             cfg.setBaseUrl("http://127.0.0.1:" + port + "/v1");
             cfg.setModel("mock-translator");
             cfg.setRequestsPerMinute(600);
+            cfg.setAutoRateLimit(false);
             cfg.setContextPreset(ContextPreset.TENSURA);
 
             TranslationService service = new TranslationService(instanceA);
@@ -857,6 +859,7 @@ class EndToEndCoreTest {
             cfg.setApiKey("sk-ant-test");
             cfg.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1");
             cfg.setRequestsPerMinute(600);
+            cfg.setAutoRateLimit(false);
             assertEquals("claude-opus-5-5", cfg.effectiveModel());
 
             Map<String, String> batch = new LinkedHashMap<>();
@@ -927,12 +930,55 @@ class EndToEndCoreTest {
         }
     }
 
+    @Test
+    void automaticRateLimitStartsPerProviderAndAdaptsToTheAccount() {
+        TranslatorConfigData cfg = new TranslatorConfigData();
+        assertTrue(cfg.isAutoRateLimit(), "automatic by default");
+        cfg.setProvider(ProviderType.GEMINI);
+        assertEquals(15, cfg.effectiveRequestsPerMinute());
+        cfg.setProvider(ProviderType.CLAUDE);
+        assertEquals(50, cfg.effectiveRequestsPerMinute());
+        cfg.setAutoRateLimit(false);
+        cfg.setRequestsPerMinute(7);
+        assertEquals(7, cfg.effectiveRequestsPerMinute(), "manual value wins when automatic is off");
+
+        com.ftbtranslator.core.api.RateLimiter auto = new com.ftbtranslator.core.api.RateLimiter(15, true, 30);
+        // Grows ~20% after every 10 successes, never above the ceiling.
+        int last = -1;
+        for (int i = 0; i < 9; i++) {
+            assertEquals(-1, auto.onSuccess(name -> null));
+        }
+        last = auto.onSuccess(name -> null);
+        assertEquals(18, last);
+        for (int i = 0; i < 200; i++) {
+            auto.onSuccess(name -> null);
+        }
+        assertEquals(30, auto.requestsPerMinute());
+        // A 429 halves it.
+        assertEquals(15, auto.onRateLimited());
+        assertEquals(4000L, auto.minIntervalMillis());
+        // An account limit reported by the provider wins (90% of it) and stops blind growth.
+        assertEquals(90, auto.onSuccess(name -> name.equals("anthropic-ratelimit-requests-limit") ? "100" : null));
+        for (int i = 0; i < 50; i++) {
+            auto.onSuccess(name -> null);
+        }
+        assertEquals(90, auto.requestsPerMinute());
+
+        com.ftbtranslator.core.api.RateLimiter manual = new com.ftbtranslator.core.api.RateLimiter(15);
+        for (int i = 0; i < 50; i++) {
+            assertEquals(-1, manual.onSuccess(name -> "500"));
+        }
+        assertEquals(-1, manual.onRateLimited());
+        assertEquals(15, manual.requestsPerMinute(), "manual mode never changes the player's value");
+    }
+
     private static TranslatorConfigData mockConfig(HttpServer server) {
         TranslatorConfigData cfg = new TranslatorConfigData();
         cfg.setProvider(ProviderType.OLLAMA);
         cfg.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1");
         cfg.setModel("mock-translator");
         cfg.setRequestsPerMinute(600);
+        cfg.setAutoRateLimit(false);
         return cfg;
     }
 

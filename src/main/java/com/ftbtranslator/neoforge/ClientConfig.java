@@ -21,6 +21,7 @@ public final class ClientConfig {
     public static final ModConfigSpec.ConfigValue<String> MODEL;
     public static final ModConfigSpec.ConfigValue<String> BASE_URL;
     public static final ModConfigSpec.IntValue REQUESTS_PER_MINUTE;
+    public static final ModConfigSpec.BooleanValue AUTO_RATE_LIMIT;
     public static final ModConfigSpec.IntValue BATCH_SIZE;
     public static final ModConfigSpec.IntValue MAX_BATCH_CHARS;
     public static final ModConfigSpec.IntValue MAX_RETRIES;
@@ -53,7 +54,10 @@ public final class ClientConfig {
                 .define("model", "");
         BASE_URL = b.comment("Endpoint HTTP base (deixe vazio para usar o padrão do provedor)")
                 .define("baseUrl", "");
-        REQUESTS_PER_MINUTE = b.comment("Limite de requisições por minuto (15 recomendado para o nível gratuito do Gemini)")
+        AUTO_RATE_LIMIT = b.comment("Limite automático: começa no padrão do provedor e se ajusta à sua conta "
+                        + "(sobe enquanto não há erros, cai pela metade a cada HTTP 429). false = usa requestsPerMinute")
+                .define("autoRateLimit", true);
+        REQUESTS_PER_MINUTE = b.comment("Limite manual de requisições por minuto (usado quando autoRateLimit = false)")
                 .defineInRange("requestsPerMinute", 15, 1, 600);
         BATCH_SIZE = b.comment("Quantidade máxima de textos enviados por lote")
                 .defineInRange("batchSize", 35, 1, 200);
@@ -124,6 +128,7 @@ public final class ClientConfig {
         data.setModel(MODEL.get());
         data.setBaseUrl(BASE_URL.get());
         data.setRequestsPerMinute(REQUESTS_PER_MINUTE.get());
+        data.setAutoRateLimit(AUTO_RATE_LIMIT.get());
         data.setBatchSize(BATCH_SIZE.get());
         data.setMaxBatchChars(MAX_BATCH_CHARS.get());
         data.setMaxRetries(MAX_RETRIES.get());
@@ -168,7 +173,8 @@ public final class ClientConfig {
         API_KEY.set(data.getApiKey());
         MODEL.set(data.getModel());
         BASE_URL.set(data.getBaseUrl());
-        REQUESTS_PER_MINUTE.set(data.getRequestsPerMinute());
+        REQUESTS_PER_MINUTE.set(Math.max(1, Math.min(600, data.getRequestsPerMinute())));
+        AUTO_RATE_LIMIT.set(data.isAutoRateLimit());
         BATCH_SIZE.set(data.getBatchSize());
         MAX_BATCH_CHARS.set(data.getMaxBatchChars());
         MAX_RETRIES.set(data.getMaxRetries());

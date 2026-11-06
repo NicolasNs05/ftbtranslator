@@ -6,22 +6,22 @@ package com.ftbtranslator.core;
 public enum ProviderType {
     GEMINI("Google Gemini", ApiMode.GEMINI,
             "https://generativelanguage.googleapis.com/v1beta", "gemini-2.5-flash", true,
-            "https://aistudio.google.com/app/apikey"),
+            "https://aistudio.google.com/app/apikey", 15),
     CLAUDE("Anthropic Claude", ApiMode.ANTHROPIC,
             "https://api.anthropic.com/v1", "claude-opus-5-5", true,
-            "https://platform.claude.com"),
+            "https://platform.claude.com", 50),
     GROQ("Groq (Grátis/Rápido)", ApiMode.OPENAI_COMPATIBLE,
             "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile", true,
-            "https://console.groq.com/keys"),
+            "https://console.groq.com/keys", 30),
     OPENROUTER("OpenRouter", ApiMode.OPENAI_COMPATIBLE,
             "https://openrouter.ai/api/v1", "meta-llama/llama-3.3-70b-instruct:free", true,
-            "https://openrouter.ai/keys"),
+            "https://openrouter.ai/keys", 20),
     OPENAI("OpenAI", ApiMode.OPENAI_COMPATIBLE,
             "https://api.openai.com/v1", "gpt-4o-mini", true,
-            "https://platform.openai.com/api-keys"),
+            "https://platform.openai.com/api-keys", 60),
     OLLAMA("Ollama Local", ApiMode.OPENAI_COMPATIBLE,
             "http://localhost:11434/v1", "qwen2.5:7b", false,
-            "https://ollama.com/download");
+            "https://ollama.com/download", 600);
 
     private final String displayName;
     private final ApiMode apiMode;
@@ -29,15 +29,17 @@ public enum ProviderType {
     private final String defaultModel;
     private final boolean requiresApiKey;
     private final String keyUrl;
+    private final int defaultRequestsPerMinute;
 
     ProviderType(String displayName, ApiMode apiMode, String defaultBaseUrl, String defaultModel,
-                 boolean requiresApiKey, String keyUrl) {
+                 boolean requiresApiKey, String keyUrl, int defaultRequestsPerMinute) {
         this.displayName = displayName;
         this.apiMode = apiMode;
         this.defaultBaseUrl = defaultBaseUrl;
         this.defaultModel = defaultModel;
         this.requiresApiKey = requiresApiKey;
         this.keyUrl = keyUrl;
+        this.defaultRequestsPerMinute = defaultRequestsPerMinute;
     }
 
     public String displayName() {
@@ -62,6 +64,14 @@ public enum ProviderType {
 
     public String keyUrl() {
         return keyUrl;
+    }
+
+    /**
+     * Starting rate of the automatic limit: what the provider's entry-level account (free tier or first
+     * paid tier) accepts. The {@link com.ftbtranslator.core.api.RateLimiter} then adapts it.
+     */
+    public int defaultRequestsPerMinute() {
+        return defaultRequestsPerMinute;
     }
 
     public ProviderType next() {

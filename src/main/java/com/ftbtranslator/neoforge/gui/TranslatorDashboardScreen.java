@@ -90,6 +90,8 @@ public final class TranslatorDashboardScreen extends Screen {
     private Button pasteKeyBtn;
     private Button testConnBtn;
     private Button glossaryBtn;
+    private Button rateModeBtn;
+    private EditBox rateBox;
     // Packs
     private Button exportZipBtn;
     private Button importZipBtn;
@@ -163,8 +165,8 @@ public final class TranslatorDashboardScreen extends Screen {
         contextBtn = startBtn = pauseResumeBtn = cancelBtn = applyReloadBtn = null;
         ftbQuestsBtn = kubeJsBtn = modsBtn = patchouliBtn = deltaBtn = null;
         modFilterBox = null;
-        providerBtn = guideBtn = toggleMaskBtn = pasteKeyBtn = testConnBtn = glossaryBtn = null;
-        apiKeyBox = null;
+        providerBtn = guideBtn = toggleMaskBtn = pasteKeyBtn = testConnBtn = glossaryBtn = rateModeBtn = null;
+        apiKeyBox = rateBox = null;
         exportZipBtn = importZipBtn = null;
     }
 
@@ -461,15 +463,61 @@ public final class TranslatorDashboardScreen extends Screen {
         glossaryBtn.setTooltip(tip("Muitos mods já vêm com tradução em português feita por pessoas. "
                 + "Com o glossário ligado, textos iguais são traduzidos na hora sem gastar a IA, e os "
                 + "termos oficiais são ensinados à IA para manter tudo consistente. Recomendado: ligado."));
+
+        String rateHelp = "Quantos pedidos por minuto o mod pode enviar para a IA (cada pedido leva um lote "
+                + "de dezenas de textos). Todo provedor tem um limite por conta: passar dele não quebra nada, "
+                + "a IA só pede para esperar (erro 429) e o mod aguarda e tenta de novo sozinho, mas a "
+                + "tradução fica mais lenta.";
+        rateModeBtn = this.addRenderableWidget(Button.builder(
+                        rateModeLabel(),
+                        b -> {
+                            if (isBusy()) {
+                                return;
+                            }
+                            workingConfig.setAutoRateLimit(!workingConfig.isAutoRateLimit());
+                            b.setMessage(rateModeLabel());
+                            persistWorkingConfig();
+                            refreshButtonStates();
+                        })
+                .bounds(left, CONTENT_Y + 96, 150, 20)
+                .build());
+        rateModeBtn.setTooltip(tip(rateHelp + " Automático (recomendado): começa no limite típico de uma conta "
+                + "inicial do provedor, sobe aos poucos enquanto não há erros e cai pela metade quando a IA "
+                + "pede para esperar. Manual: usa sempre o número que você digitar ao lado."));
+
+        rateBox = new EditBox(this.font, left + 156, CONTENT_Y + 96, 40, 20, Component.literal("req/min"));
+        rateBox.setMaxLength(3);
+        rateBox.setFilter(s -> s.matches("\\d{0,3}"));
+        rateBox.setValue(String.valueOf(workingConfig.getRequestsPerMinute()));
+        rateBox.setResponder(val -> {
+            if (isBusy() || workingConfig.isAutoRateLimit() || val.isEmpty()) {
+                return;
+            }
+            int rpm = Math.max(1, Math.min(600, Integer.parseInt(val)));
+            workingConfig.setRequestsPerMinute(rpm);
+            persistWorkingConfig();
+        });
+        rateBox.setTooltip(tip(rateHelp + " Digite de 1 a 600 (só vale no modo Manual). Na dúvida, use o "
+                + "limite da sua conta que aparece no site do provedor; se aparecerem muitos avisos de "
+                + "espera, diminua."));
+        this.addRenderableWidget(rateBox);
+    }
+
+    private Component rateModeLabel() {
+        return Component.literal("Limite: " + (workingConfig.isAutoRateLimit() ? "§aAutomático" : "§eManual"));
     }
 
     private void renderEngineTab(GuiGraphics g, int left) {
         g.drawString(this.font, "§7Provedor de IA e chave de acesso:", left, CONTENT_Y + 2, 0xFFA0A0A0);
         g.drawString(this.font, "§fAPI Key:", left, CONTENT_Y + 44, 0xFFE0E0E0);
         g.drawString(this.font, "§7Glossário oficial dos mods:", left, CONTENT_Y + 62, 0xFFA0A0A0);
-        g.drawString(this.font, "§8Modelo: §7" + workingConfig.effectiveModel()
-                        + " §8| Limite: §7" + workingConfig.getRequestsPerMinute() + " req/min",
-                left, CONTENT_Y + 100, 0xFF909090);
+        g.drawString(this.font, "§8Modelo: §7" + workingConfig.effectiveModel(), left + 230, CONTENT_Y + 62,
+                0xFF909090);
+        g.drawString(this.font, "§7req/min", left + 200, CONTENT_Y + 102, 0xFFA0A0A0);
+        String rateInfo = workingConfig.isAutoRateLimit()
+                ? "§8começa em §7" + workingConfig.effectiveRequestsPerMinute() + "§8, ajusta à conta"
+                : "§8valor fixo definido por você";
+        g.drawString(this.font, rateInfo, left + 246, CONTENT_Y + 102, 0xFF909090);
     }
 
     // ------------------------------------------------------------------ tab: Pacotes & Comunidade
@@ -699,7 +747,7 @@ public final class TranslatorDashboardScreen extends Screen {
         boolean canEditConfig = !running && !testingConnection;
 
         for (Button b : new Button[]{contextBtn, ftbQuestsBtn, kubeJsBtn, modsBtn, patchouliBtn, deltaBtn,
-                providerBtn, guideBtn, toggleMaskBtn, pasteKeyBtn, glossaryBtn}) {
+                providerBtn, guideBtn, toggleMaskBtn, pasteKeyBtn, glossaryBtn, rateModeBtn}) {
             if (b != null) {
                 b.active = canEditConfig;
             }
@@ -711,6 +759,14 @@ public final class TranslatorDashboardScreen extends Screen {
                 if (!canEditConfig) {
                     box.setFocused(false);
                 }
+            }
+        }
+        if (rateBox != null) {
+            boolean editable = canEditConfig && !workingConfig.isAutoRateLimit();
+            rateBox.setEditable(editable);
+            rateBox.active = editable;
+            if (!editable) {
+                rateBox.setFocused(false);
             }
         }
         if (testConnBtn != null) {

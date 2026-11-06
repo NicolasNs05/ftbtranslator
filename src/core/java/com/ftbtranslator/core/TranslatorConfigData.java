@@ -17,6 +17,7 @@ public final class TranslatorConfigData {
     private String model = "";
     private String baseUrl = "";
     private int requestsPerMinute = 15;
+    private boolean autoRateLimit = true;
     private int batchSize = 40;
     private int maxBatchChars = 6000;
     private int maxRetries = 4;
@@ -40,6 +41,7 @@ public final class TranslatorConfigData {
         c.model = model;
         c.baseUrl = baseUrl;
         c.requestsPerMinute = requestsPerMinute;
+        c.autoRateLimit = autoRateLimit;
         c.batchSize = batchSize;
         c.maxBatchChars = maxBatchChars;
         c.maxRetries = maxRetries;
@@ -177,6 +179,20 @@ public final class TranslatorConfigData {
 
     public void setBaseUrl(String baseUrl) {
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
+    }
+
+    /** Automatic limit: start at the provider's entry-level rate and adapt to the account. */
+    public boolean isAutoRateLimit() {
+        return autoRateLimit;
+    }
+
+    public void setAutoRateLimit(boolean v) {
+        this.autoRateLimit = v;
+    }
+
+    /** Rate the next run starts with: the provider default in automatic mode, the player's value otherwise. */
+    public int effectiveRequestsPerMinute() {
+        return autoRateLimit ? provider.defaultRequestsPerMinute() : requestsPerMinute;
     }
 
     public int getRequestsPerMinute() {

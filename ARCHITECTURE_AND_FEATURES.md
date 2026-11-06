@@ -259,6 +259,11 @@ Antes de qualquer string ser enviada para a IA, [`TokenMasker.mask(String)`](src
 ### 8.1.1. Provedor Anthropic Claude
 * **Implementado:** provedor `CLAUDE` com cliente nativo da Messages API (`POST /v1/messages`, `anthropic-version: 2026-10-21`), modelo padrão `claude-opus-5-5` (configurável, ex.: `claude-sonnet-5-5`, `claude-haiku-5-5`). Saída estruturada por JSON Schema (`output_config.format`), *effort* explícito, *fallback* de recusa no servidor (`fallbacks: "default"`) nos modelos que suportam, e retry de HTTP 429/529 respeitando `retry-after` (também aproveitado pelos demais provedores).
 
+### 8.1.2. Limite de Requisições Automático ou Manual
+* **Implementado:** aba **IA & Glossário** com botão `Limite: Automático/Manual` e campo `req/min` (1–600), ambos com *tooltip* explicando que passar do limite só causa espera, não falha.
+  * **Automático (padrão, `autoRateLimit = true`):** começa no limite típico de conta inicial de cada provedor (`ProviderType.defaultRequestsPerMinute`: Gemini 15, Claude 50, Groq 30, OpenRouter 20, OpenAI 60, Ollama 600); o [`RateLimiter`](src/core/java/com/ftbtranslator/core/api/RateLimiter.java) sobe ~20% a cada 10 respostas sem erro (até 2× o inicial), cai pela metade a cada HTTP 429 e, quando o provedor informa o limite da conta (`anthropic-ratelimit-requests-limit`), usa 90% dele.
+  * **Manual:** usa sempre o valor de `requestsPerMinute`.
+
 ### 8.2. Motor de Cache de Segunda Geração e Otimização Extrema de Tokens
 * **Implementado — Glossário Oficial:** os `pt_br.json` que os próprios mods já trazem (tradução humana) alimentam o [`TranslationGlossary`](src/core/java/com/ftbtranslator/core/cache/TranslationGlossary.java). Textos idênticos em qualquer frente são resolvidos sem IA (validando placeholders), e termos curtos encontrados no lote são injetados no prompt para manter a terminologia oficial. Arquivos `pt_br` que são só cópia do `en_us` são ignorados; divergências são resolvidas por votação.
 * **Implementado — Import seguro:** importar um bundle `.zip` é recusado enquanto uma tradução está rodando, evitando que o flush do cache em memória sobrescreva o cache importado.

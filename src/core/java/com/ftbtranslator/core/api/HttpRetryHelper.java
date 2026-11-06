@@ -83,7 +83,19 @@ public final class HttpRetryHelper {
             int status = response.statusCode();
             String body = response.body() == null ? "" : response.body();
             if (status >= 200 && status < 300) {
+                java.net.http.HttpHeaders responseHeaders = response.headers();
+                int grown = rateLimiter.onSuccess(name -> responseHeaders.firstValue(name).orElse(null));
+                if (grown > 0) {
+                    log(LogLevel.INFO, "Limite automático ajustado para " + grown + " req/min.");
+                }
                 return body;
+            }
+            if (status == 429) {
+                int reduced = rateLimiter.onRateLimited();
+                if (reduced > 0) {
+                    log(LogLevel.WARN, "O provedor pediu calma (HTTP 429): limite automático reduzido para "
+                            + reduced + " req/min.");
+                }
             }
 
             if (isRetryableStatus(status)) {

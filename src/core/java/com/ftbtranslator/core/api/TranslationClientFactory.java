@@ -12,7 +12,12 @@ public final class TranslationClientFactory {
     }
 
     public static AiTranslationClient create(TranslatorConfigData config, TranslationCallback callback) {
-        RateLimiter limiter = new RateLimiter(config.getRequestsPerMinute());
+        int start = config.effectiveRequestsPerMinute();
+        // Automatic mode may grow up to twice the provider's entry-level rate on its own (more when the
+        // provider reports the account limit); manual mode keeps the player's value fixed.
+        RateLimiter limiter = config.isAutoRateLimit()
+                ? new RateLimiter(start, true, start * 2)
+                : new RateLimiter(start);
         return switch (config.getProvider().apiMode()) {
             case GEMINI -> new GeminiTranslationClient(config, limiter, callback);
             case ANTHROPIC -> new AnthropicTranslationClient(config, limiter, callback);

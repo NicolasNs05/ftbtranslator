@@ -7,6 +7,7 @@ import com.ftbtranslator.core.bundle.TranslationBundleManager;
 import com.ftbtranslator.core.cache.TranslationCache;
 import com.ftbtranslator.core.cache.TranslationGlossary;
 import com.ftbtranslator.core.pack.ResourcePackGenerator;
+import com.ftbtranslator.core.parser.ExistingTranslationHarvester;
 import com.ftbtranslator.core.parser.FtbQuestsTranslator;
 import com.ftbtranslator.core.parser.JarModExtractor;
 import com.ftbtranslator.core.parser.KubeJsTranslator;
@@ -217,9 +218,16 @@ public final class TranslationService {
             token.checkpoint();
             Map<String, JarModExtractor.NamespaceLangAccumulator> jarIndex =
                     JarModExtractor.indexModJars(paths, config, glossary, callback);
+            int officialTerms = glossary.size();
+            // Reuse translations that already exist in the instance (community resource packs and an
+            // installed quest pt_br.snbt) before any file is rewritten by this run.
+            ExistingTranslationHarvester.HarvestStats harvested =
+                    ExistingTranslationHarvester.harvest(paths, config, jarIndex, glossary, callback);
             if (!glossary.isEmpty()) {
-                log(callback, LogLevel.INFO, "Glossário oficial: " + glossary.size()
-                        + " termo(s) com tradução humana encontrados nos mods.");
+                log(callback, LogLevel.INFO, "Glossário: " + glossary.size() + " texto(s) já traduzidos"
+                        + " (mods: " + officialTerms
+                        + " | pacotes em resourcepacks/: " + harvested.resourcePackPairs()
+                        + " | missões já traduzidas: " + harvested.questPairs() + ").");
             }
 
             // Phase 1: Scan enabled fronts in priority order (FTB Quests -> KubeJS -> Patchouli -> Mods)

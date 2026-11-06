@@ -47,6 +47,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *   <li>{@link TranslationBundleManager} export & import round-trip</li>
  *   <li>Automatic Tensura modpack detection + Gemini multi-model fallback on HTTP 503</li>
  *   <li>Official mod translations reused as a glossary (exact match + prompt terms) and import guard</li>
+ *   <li>Community translations (resource packs + installed quest pt_br.snbt) reused instead of overwritten</li>
  * </ul>
  */
 class EndToEndCoreTest {
@@ -655,6 +656,82 @@ class EndToEndCoreTest {
             assertFalse(afterRun.getMessage().contains("tradução está em andamento"), afterRun.getMessage());
         } finally {
             release.countDown();
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void communityResourcePackAndInstalledQuestTranslationAreReusedInsteadOfOverwritten(@TempDir Path tempRoot)
+            throws Exception {
+        Path instance = tempRoot.resolve("instance");
+        Path questsLangDir = instance.resolve("config/ftbquests/quests/lang");
+        Files.createDirectories(questsLangDir);
+        Files.writeString(questsLangDir.resolve("en_us.snbt"), """
+                {
+                    quest.A1.title: "Slime Awakening"
+                    quest.A1.quest_desc: ["Absorb 10 slimes.", "", "{@pagebreak}", "Talk to Veldora."]
+                    quest.B2.title: "Brand New Quest"
+                }
+                """, StandardCharsets.UTF_8);
+        // Community translation installed in the instance (made for an older pack version: B2 is missing).
+        Files.writeString(questsLangDir.resolve("pt_br.snbt"), """
+                {
+                    quest.A1.title: "Despertar do Slime"
+                    quest.A1.quest_desc: ["Absorva 10 slimes.", "", "{@pagebreak}", "Fale com Veldora."]
+                }
+                """, StandardCharsets.UTF_8);
+
+        Path modsDir = instance.resolve("mods");
+        Files.createDirectories(modsDir);
+        try (OutputStream fos = Files.newOutputStream(modsDir.resolve("tensura.jar"));
+             ZipOutputStream zos = new ZipOutputStream(fos)) {
+            writeZipText(zos, "assets/tensura/lang/en_us.json", """
+                    {
+                      "item.tensura.magic_ore": "Magic Ore",
+                      "item.tensura.hipokute": "Hipokute Herb",
+                      "item.tensura.new_item": "Demon Lord Seed"
+                    }
+                    """);
+        }
+        // Community resource pack: only pt_br.json, no en_us.json inside.
+        Path packsDir = instance.resolve("resourcepacks");
+        Files.createDirectories(packsDir);
+        try (OutputStream fos = Files.newOutputStream(packsDir.resolve("Traducao-PTBR-Tensura.zip"));
+             ZipOutputStream zos = new ZipOutputStream(fos)) {
+            writeZipText(zos, "pack.mcmeta", "{\"pack\":{\"pack_format\":34,\"description\":\"x\"}}");
+            writeZipText(zos, "assets/tensura/lang/pt_br.json", """
+                    {
+                      "item.tensura.magic_ore": "Minério Mágico",
+                      "item.tensura.hipokute": "Erva Hipokute"
+                    }
+                    """);
+        }
+
+        List<String> sentTexts = Collections.synchronizedList(new ArrayList<>());
+        HttpServer server = mockOpenAiServer(Collections.synchronizedList(new ArrayList<>()), sentTexts, null);
+        server.start();
+        try {
+            TranslationService service = new TranslationService(instance);
+            TranslationReport report = service.runSynchronously(mockConfig(server),
+                    EnumSet.of(TranslationScope.FTBQUESTS, TranslationScope.MODS), null);
+            assertTrue(report.success(), report.message());
+
+            // Only texts nobody had translated yet reach the AI.
+            assertEquals(List.of("Brand New Quest", "Demon Lord Seed").stream().sorted().toList(),
+                    sentTexts.stream().sorted().toList());
+
+            String questPtBr = Files.readString(questsLangDir.resolve("pt_br.snbt"), StandardCharsets.UTF_8);
+            assertTrue(questPtBr.contains("\"Despertar do Slime\""), questPtBr);
+            assertTrue(questPtBr.contains("\"Absorva 10 slimes.\""), questPtBr);
+            assertTrue(questPtBr.contains("\"Fale com Veldora.\""), questPtBr);
+            assertTrue(questPtBr.contains("[PT-BR] Brand New Quest"), questPtBr);
+
+            String modPtBr = Files.readString(instance.resolve(
+                    "resourcepacks/AutoTranslated_Pack_PTBR/assets/tensura/lang/pt_br.json"), StandardCharsets.UTF_8);
+            assertTrue(modPtBr.contains("Minério Mágico"), modPtBr);
+            assertTrue(modPtBr.contains("Erva Hipokute"), modPtBr);
+            assertTrue(modPtBr.contains("[PT-BR] Demon Lord Seed"), modPtBr);
+        } finally {
             server.stop(0);
         }
     }

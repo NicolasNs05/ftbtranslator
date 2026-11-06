@@ -104,6 +104,7 @@ ftbtranslator/
 │   │   ├── pack/
 │   │   │   └── ResourcePackGenerator.java # Gerador pack.mcmeta (format 15..99)
 │   │   ├── parser/
+│   │   │   ├── ExistingTranslationHarvester.java # Reuso de traduções já instaladas
 │   │   │   ├── FtbQuestsTranslator.java   # Frentes 1 e 2: FTB Quests (.snbt)
 │   │   │   ├── JarModExtractor.java       # Frente 4: .jar + JIJ/JarJar + Delta
 │   │   │   ├── JsonLangIO.java            # Leitura/escrita atômica de JSON
@@ -252,5 +253,6 @@ Antes de qualquer string ser enviada para a IA, [`TokenMasker.mask(String)`](src
 
 ### 8.2. Motor de Cache de Segunda Geração e Otimização Extrema de Tokens
 * **Implementado — Glossário Oficial:** os `pt_br.json` que os próprios mods já trazem (tradução humana) alimentam o [`TranslationGlossary`](src/core/java/com/ftbtranslator/core/cache/TranslationGlossary.java). Textos idênticos em qualquer frente são resolvidos sem IA (validando placeholders), e termos curtos encontrados no lote são injetados no prompt para manter a terminologia oficial. Arquivos `pt_br` que são só cópia do `en_us` são ignorados; divergências são resolvidas por votação.
+* **Implementado — Reuso de traduções da comunidade:** o [`ExistingTranslationHarvester`](src/core/java/com/ftbtranslator/core/parser/ExistingTranslationHarvester.java) alimenta o glossário com (1) os `pt_br.json` de pacotes de tradução em `resourcepacks/` (pasta ou `.zip`, exceto o pacote gerado), pareados por chave com o `en_us` dos `.jar`, e (2) o `pt_br.snbt` das missões já instalado, pareado por chave (e por linha, nas descrições) com o `en_us.snbt` **antes** de ser reescrito. Assim, só textos ainda não traduzidos vão para a IA e a tradução existente é preservada.
 * **Implementado — Import seguro:** importar um bundle `.zip` é recusado enquanto uma tradução está rodando, evitando que o flush do cache em memória sobrescreva o cache importado.
 * Pesquisa e implementação de técnicas avançadas de aproveitamento de cache — incluindo pré-aquecimento de dicionários com termos recorrentes de mods de Minecraft, compressão de payload JSON em trânsito e armazenamento incremental — visando reduzir ainda mais o consumo de tokens de IA e acelerar drasticamente a primeira tradução de modpacks gigantes.

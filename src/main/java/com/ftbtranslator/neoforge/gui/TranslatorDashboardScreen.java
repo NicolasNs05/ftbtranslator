@@ -378,6 +378,7 @@ public final class TranslatorDashboardScreen extends Screen {
                 .bounds(left, row1Y, 205, 20)
                 .build());
         providerBtn.setTooltip(tip("Serviço de IA que faz a tradução. Gemini e Groq têm plano gratuito; "
+                + "Claude (Anthropic) é pago e tem alta qualidade; "
                 + "Ollama roda no seu PC sem internet e sem chave."));
 
         guideBtn = this.addRenderableWidget(Button.builder(

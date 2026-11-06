@@ -46,6 +46,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *   <li>Per-batch SHA-256 cache persistence + {@code pack.mcmeta} ({@code pack_format: 34})</li>
  *   <li>{@link TranslationBundleManager} export & import round-trip</li>
  *   <li>Automatic Tensura modpack detection + Gemini multi-model fallback on HTTP 503</li>
+ *   <li>Native Anthropic Messages API client (headers, structured output, refusal, 529 + retry-after)</li>
  *   <li>Official mod translations reused as a glossary (exact match + prompt terms) and import guard</li>
  * </ul>
  */
@@ -785,6 +786,145 @@ class EndToEndCoreTest {
         assertEquals(2, com.ftbtranslator.core.parser.JarModExtractor.countMatchingJars(jars, List.of("tensura", "jei")));
         assertEquals(1, com.ftbtranslator.core.parser.JarModExtractor.countMatchingJars(jars, List.of("broken")));
         assertEquals(0, com.ftbtranslator.core.parser.JarModExtractor.countMatchingJars(jars, List.of("create")));
+    }
+
+    @Test
+    void anthropicClientSendsNativeMessagesRequestAndParsesStructuredOutput() throws Exception {
+        List<JsonObject> requests = Collections.synchronizedList(new ArrayList<>());
+        List<Map<String, String>> requestHeaders = Collections.synchronizedList(new ArrayList<>());
+        int[] calls = {0};
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/messages", exchange -> {
+            calls[0]++;
+            JsonObject req = JsonParser.parseString(new String(
+                    exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject();
+            requests.add(req);
+            Map<String, String> h = new LinkedHashMap<>();
+            for (String name : List.of("x-api-key", "anthropic-version", "anthropic-beta")) {
+                String v = exchange.getRequestHeaders().getFirst(name);
+                if (v != null) {
+                    h.put(name, v);
+                }
+            }
+            requestHeaders.add(h);
+
+            String body;
+            int status;
+            if (calls[0] == 1) {
+                // First attempt: overloaded, must be retried after retry-after.
+                status = 529;
+                exchange.getResponseHeaders().add("retry-after", "0");
+                body = "{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}";
+            } else {
+                JsonObject input = JsonParser.parseString(
+                        req.getAsJsonArray("messages").get(0).getAsJsonObject().get("content").getAsString())
+                        .getAsJsonObject();
+                com.google.gson.JsonArray items = new com.google.gson.JsonArray();
+                for (Map.Entry<String, JsonElement> e : input.entrySet()) {
+                    JsonObject item = new JsonObject();
+                    item.addProperty("id", e.getKey());
+                    item.addProperty("text", "[PT-BR] " + e.getValue().getAsString());
+                    items.add(item);
+                }
+                JsonObject structured = new JsonObject();
+                structured.add("translations", items);
+                JsonObject thinking = new JsonObject();
+                thinking.addProperty("type", "thinking");
+                thinking.addProperty("thinking", "");
+                JsonObject text = new JsonObject();
+                text.addProperty("type", "text");
+                text.addProperty("text", structured.toString());
+                com.google.gson.JsonArray content = new com.google.gson.JsonArray();
+                content.add(thinking);
+                content.add(text);
+                JsonObject resp = new JsonObject();
+                resp.addProperty("type", "message");
+                resp.addProperty("stop_reason", "end_turn");
+                resp.add("content", content);
+                status = 200;
+                body = resp.toString();
+            }
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(status, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            TranslatorConfigData cfg = new TranslatorConfigData();
+            cfg.setProvider(ProviderType.CLAUDE);
+            cfg.setApiKey("sk-ant-test");
+            cfg.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1");
+            cfg.setRequestsPerMinute(600);
+            assertEquals("claude-opus-5-5", cfg.effectiveModel());
+
+            Map<String, String> batch = new LinkedHashMap<>();
+            batch.put("0", "Iron Ingot");
+            batch.put("1", "Hello __TK0__");
+            Map<String, String> out = com.ftbtranslator.core.api.TranslationClientFactory.create(cfg, null)
+                    .translateBatch(batch, "Traduza para pt-BR.", new CancellationToken());
+
+            assertEquals(Map.of("0", "[PT-BR] Iron Ingot", "1", "[PT-BR] Hello __TK0__"), out);
+            assertEquals(2, calls[0], "529 must be retried");
+
+            Map<String, String> h = requestHeaders.get(1);
+            assertEquals("sk-ant-test", h.get("x-api-key"));
+            assertEquals("2026-10-21", h.get("anthropic-version"));
+            assertEquals("server-side-fallback-2026-07-01", h.get("anthropic-beta"));
+
+            JsonObject req = requests.get(1);
+            assertEquals("claude-opus-5-5", req.get("model").getAsString());
+            assertFalse(req.has("temperature"), "sampling params are rejected by this API version");
+            assertEquals("default", req.get("fallbacks").getAsString());
+            assertEquals("medium", req.getAsJsonObject("output_config").get("effort").getAsString());
+            JsonObject format = req.getAsJsonObject("output_config").getAsJsonObject("format");
+            assertEquals("json_schema", format.get("type").getAsString());
+            assertFalse(format.getAsJsonObject("schema").get("additionalProperties").getAsBoolean());
+
+            // Haiku: no server-side fallback (not offered for it).
+            requests.clear();
+            requestHeaders.clear();
+            cfg.setModel("claude-haiku-5-5");
+            com.ftbtranslator.core.api.TranslationClientFactory.create(cfg, null)
+                    .translateBatch(Map.of("0", "Gold"), "Traduza.", new CancellationToken());
+            assertFalse(requests.get(0).has("fallbacks"));
+            assertNull(requestHeaders.get(0).get("anthropic-beta"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void anthropicRefusalAndTruncationAreReportedAsErrors() {
+        String refusal = "{\"stop_reason\":\"refusal\",\"stop_details\":{\"type\":\"refusal\",\"category\":\"cyber\"},"
+                + "\"content\":[]}";
+        IOException refused = assertThrows(IOException.class,
+                () -> parseAnthropic(refusal));
+        assertTrue(refused.getMessage().contains("recusou") && refused.getMessage().contains("cyber"),
+                refused.getMessage());
+
+        String truncated = "{\"stop_reason\":\"max_tokens\",\"content\":[{\"type\":\"text\",\"text\":\"{\\\"transl\"}]}";
+        IOException cut = assertThrows(IOException.class, () -> parseAnthropic(truncated));
+        assertTrue(cut.getMessage().contains("JSON"), "service splits batches whose error mentions JSON");
+    }
+
+    private static Map<String, String> parseAnthropic(String body) throws IOException {
+        try {
+            java.lang.reflect.Method m = com.ftbtranslator.core.api.AnthropicTranslationClient.class
+                    .getDeclaredMethod("parseTranslations", String.class);
+            m.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<String, String> r = (Map<String, String>) m.invoke(null, body);
+            return r;
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            if (e.getCause() instanceof IOException io) {
+                throw io;
+            }
+            throw new RuntimeException(e.getCause());
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static TranslatorConfigData mockConfig(HttpServer server) {

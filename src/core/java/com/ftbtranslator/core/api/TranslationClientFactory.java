@@ -1,6 +1,5 @@
 package com.ftbtranslator.core.api;
 
-import com.ftbtranslator.core.ApiMode;
 import com.ftbtranslator.core.TranslationCallback;
 import com.ftbtranslator.core.TranslatorConfigData;
 
@@ -14,9 +13,10 @@ public final class TranslationClientFactory {
 
     public static AiTranslationClient create(TranslatorConfigData config, TranslationCallback callback) {
         RateLimiter limiter = new RateLimiter(config.getRequestsPerMinute());
-        if (config.getProvider().apiMode() == ApiMode.GEMINI) {
-            return new GeminiTranslationClient(config, limiter, callback);
-        }
-        return new OpenAiCompatibleClient(config, limiter, callback);
+        return switch (config.getProvider().apiMode()) {
+            case GEMINI -> new GeminiTranslationClient(config, limiter, callback);
+            case ANTHROPIC -> new AnthropicTranslationClient(config, limiter, callback);
+            case OPENAI_COMPATIBLE -> new OpenAiCompatibleClient(config, limiter, callback);
+        };
     }
 }

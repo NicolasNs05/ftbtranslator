@@ -18,12 +18,13 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Shared HTTP + Exponential Backoff (HTTP 429 / 503 / 502 / 504) + resilient JSON dictionary extraction
+ * Shared HTTP + Exponential Backoff (HTTP 429 / 529 / 5xx, honouring {@code retry-after}) + resilient JSON dictionary extraction
  * for AI translation providers.
  */
 public final class HttpRetryHelper {
 
     private static final long INITIAL_BACKOFF_MS = 2_500L;
+    private static final long MAX_RETRY_AFTER_MS = 60_000L;
 
     private final HttpClient httpClient;
     private final RateLimiter rateLimiter;
@@ -91,7 +92,8 @@ public final class HttpRetryHelper {
                     throw new IOException("HTTP " + status + " persistente após " + attempt
                             + " tentativas: " + summarizeErrorBody(body));
                 }
-                long delay = backoffDelayMillis(attempt);
+                long delay = Math.max(backoffDelayMillis(attempt),
+                        retryAfterMillis(response.headers().firstValue("retry-after").orElse(null)));
                 log(LogLevel.WARN, "Servidor retornou HTTP " + status + " (Rate-Limit / Sobrecarga). "
                         + "Exponential Backoff: aguardando " + (delay / 1000.0) + "s (tentativa "
                         + (attempt + 1) + "/" + maxRetries + ")...");
@@ -104,7 +106,22 @@ public final class HttpRetryHelper {
     }
 
     private static boolean isRetryableStatus(int status) {
-        return status == 429 || status == 503 || status == 502 || status == 504 || status == 408;
+        // 529 = Anthropic "overloaded_error"; 500 = transient server error.
+        return status == 429 || status == 529 || status == 500 || status == 503 || status == 502
+                || status == 504 || status == 408;
+    }
+
+    /** Parses a {@code retry-after} header given in seconds; 0 when absent or unparseable. */
+    static long retryAfterMillis(String headerValue) {
+        if (headerValue == null || headerValue.isBlank()) {
+            return 0L;
+        }
+        try {
+            double seconds = Double.parseDouble(headerValue.trim());
+            return Math.max(0L, Math.min(MAX_RETRY_AFTER_MS, (long) Math.ceil(seconds * 1000.0)));
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
     }
 
     private static long backoffDelayMillis(int attempt) {

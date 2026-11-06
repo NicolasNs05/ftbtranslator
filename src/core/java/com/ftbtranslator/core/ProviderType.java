@@ -7,6 +7,9 @@ public enum ProviderType {
     GEMINI("Google Gemini", ApiMode.GEMINI,
             "https://generativelanguage.googleapis.com/v1beta", "gemini-2.5-flash", true,
             "https://aistudio.google.com/app/apikey"),
+    CLAUDE("Anthropic Claude", ApiMode.ANTHROPIC,
+            "https://api.anthropic.com/v1", "claude-opus-5-5", true,
+            "https://platform.claude.com"),
     GROQ("Groq (Grátis/Rápido)", ApiMode.OPENAI_COMPATIBLE,
             "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile", true,
             "https://console.groq.com/keys"),
@@ -80,6 +83,7 @@ public enum ProviderType {
         return switch (s) {
             case "GOOGLE", "AISTUDIO", "GEMINI_STUDIO" -> GEMINI;
             case "LOCAL", "OLLAMA_LOCAL" -> OLLAMA;
+            case "ANTHROPIC", "ANTHROPIC_CLAUDE", "OPUS", "SONNET", "HAIKU" -> CLAUDE;
             case "OPENAI_COMPATIBLE", "CHATGPT", "GPT" -> OPENAI;
             default -> null;
         };

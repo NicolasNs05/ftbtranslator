@@ -75,7 +75,7 @@ ftbtranslator/
 ├── ARCHITECTURE_AND_FEATURES.md           # Documentação técnica do projeto
 ├── src/
 │   ├── core/java/com/ftbtranslator/core/  # CAMADA CORE (100% Java 21 + Gson)
-│   │   ├── ApiMode.java                   # Modos HTTP (GEMINI / OPENAI)
+│   │   ├── ApiMode.java                   # Modos HTTP (GEMINI/OPENAI/CLAUDE)
 │   │   ├── CancellationToken.java         # Pausa e cancelamento cooperativo
 │   │   ├── ContextPreset.java             # Presets (DEFAULT, TENSURA, TECH...)
 │   │   ├── GamePaths.java                 # Caminhos da instância e detecção
@@ -90,6 +90,7 @@ ftbtranslator/
 │   │   ├── TranslatorConfigData.java      # POJO puro de configuração
 │   │   ├── api/
 │   │   │   ├── AiTranslationClient.java   # Contrato dos clientes HTTP de IA
+│   │   │   ├── AnthropicTranslationClient.java # Claude via /v1/messages
 │   │   │   ├── GeminiTranslationClient.java # Cliente Gemini + Pool + Fallback
 │   │   │   ├── HttpRetryHelper.java       # Retry HTTP com Exponential Backoff
 │   │   │   ├── OpenAiCompatibleClient.java# Cliente REST /v1/chat/completions
@@ -157,7 +158,7 @@ flowchart LR
 4. Os templates restantes são agrupados por [`TranslationService.buildAdaptiveBatches`](src/core/java/com/ftbtranslator/core/TranslationService.java#L525-L580) em lotes de até **80 strings curtas** (ou até **15 strings longas** `> 300` caracteres, respeitando o teto de caracteres por lote).
 
 ### Fase 4: Tradução Assíncrona em Lotes (Round-Robin, Rate-Limiter, Split-on-Timeout e Flush Periódico)
-1. Para cada lote, o cliente de IA ativo ([`GeminiTranslationClient`](src/core/java/com/ftbtranslator/core/api/GeminiTranslationClient.java) ou [`OpenAiCompatibleClient`](src/core/java/com/ftbtranslator/core/api/OpenAiCompatibleClient.java)) envia um objeto JSON indexado (`{"0": "...", "1": "..."}`) acompanhado do System Prompt temático.
+1. Para cada lote, o cliente de IA ativo ([`GeminiTranslationClient`](src/core/java/com/ftbtranslator/core/api/GeminiTranslationClient.java) , [`OpenAiCompatibleClient`](src/core/java/com/ftbtranslator/core/api/OpenAiCompatibleClient.java) ou [`AnthropicTranslationClient`](src/core/java/com/ftbtranslator/core/api/AnthropicTranslationClient.java)) envia um objeto JSON indexado (`{"0": "...", "1": "..."}`) acompanhado do System Prompt temático.
 2. Em caso de timeout ou resposta truncada em lotes grandes, [`translateBatchResilient`](src/core/java/com/ftbtranslator/core/TranslationService.java#L480-L523) divide o lote automaticamente ao meio (`left` e `right`) e traduz cada metade recursivamente.
 3. Para evitar *Disk Thrashing* em caches grandes (15–30 MB), [`cache.flushIfDueAfterBatch()`](src/core/java/com/ftbtranslator/core/cache/TranslationCache.java#L156-L169) grava o arquivo `cache_pt_br.json` em disco apenas a cada **10 lotes concluídos** ou quando decorridos **30 segundos** desde o último save — e o bloco `finally` do `TranslationService` executa obrigatoriamente `cache.flush()` ao concluir, pausar, cancelar ou falhar.
 
@@ -254,6 +255,9 @@ Antes de qualquer string ser enviada para a IA, [`TokenMasker.mask(String)`](src
   * **IA & Glossário:** provedor, API Key, teste de conexão, guia de chave gratuita e a opção `useOfficialGlossary`.
   * **Pacotes (.zip):** exportar, importar, abrir a pasta `exports/` e avisos sobre servidores multiplayer dedicados.
   * A barra de progresso e a linha de status aparecem em todas as abas. O `ProgressSnapshot` ganhou `stringsFromGlossary` para separar as métricas.
+
+### 8.1.1. Provedor Anthropic Claude
+* **Implementado:** provedor `CLAUDE` com cliente nativo da Messages API (`POST /v1/messages`, `anthropic-version: 2026-10-21`), modelo padrão `claude-opus-5-5` (configurável, ex.: `claude-sonnet-5-5`, `claude-haiku-5-5`). Saída estruturada por JSON Schema (`output_config.format`), *effort* explícito, *fallback* de recusa no servidor (`fallbacks: "default"`) nos modelos que suportam, e retry de HTTP 429/529 respeitando `retry-after` (também aproveitado pelos demais provedores).
 
 ### 8.2. Motor de Cache de Segunda Geração e Otimização Extrema de Tokens
 * **Implementado — Glossário Oficial:** os `pt_br.json` que os próprios mods já trazem (tradução humana) alimentam o [`TranslationGlossary`](src/core/java/com/ftbtranslator/core/cache/TranslationGlossary.java). Textos idênticos em qualquer frente são resolvidos sem IA (validando placeholders), e termos curtos encontrados no lote são injetados no prompt para manter a terminologia oficial. Arquivos `pt_br` que são só cópia do `en_us` são ignorados; divergências são resolvidas por votação.

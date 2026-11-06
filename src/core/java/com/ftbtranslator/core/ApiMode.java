@@ -7,5 +7,7 @@ public enum ApiMode {
     /** Native Google AI Studio endpoint: {@code /v1beta/models/{model}:generateContent}. */
     GEMINI,
     /** OpenAI-style {@code /v1/chat/completions} (OpenAI, Groq, OpenRouter, DeepSeek, Ollama...). */
-    OPENAI_COMPATIBLE
+    OPENAI_COMPATIBLE,
+    /** Native Anthropic Messages API: {@code POST /v1/messages} (Claude). */
+    ANTHROPIC
 }

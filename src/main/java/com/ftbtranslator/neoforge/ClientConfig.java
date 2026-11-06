@@ -45,7 +45,7 @@ public final class ClientConfig {
         ModConfigSpec.Builder b = new ModConfigSpec.Builder();
 
         b.comment("Configurações de Provedor de IA e Rede").push("provider");
-        PROVIDER = b.comment("Provedor de IA: GEMINI, GROQ, OPENROUTER, OPENAI ou OLLAMA")
+        PROVIDER = b.comment("Provedor de IA: GEMINI, CLAUDE, GROQ, OPENROUTER, OPENAI ou OLLAMA")
                 .defineEnum("provider", ProviderType.GEMINI);
         API_KEY = b.comment("Chave de API do provedor selecionado (vazio para Ollama local)")
                 .define("apiKey", "");

@@ -9,7 +9,7 @@ O **Universal Modpack & Quests Auto-Translator** é um mod *Client-Side* projeta
 
 ## 1. Visão Geral da Arquitetura Multi-Loader
 
-O projeto foi construído sobre uma separação física e lógica estrita em dois *Source Sets* no [`build.gradle`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/build.gradle):
+O projeto foi construído sobre uma separação física e lógica estrita em dois *Source Sets* no [`build.gradle`](build.gradle):
 
 ```mermaid
 flowchart TB
@@ -58,7 +58,7 @@ flowchart TB
 ```
 
 ### 1.1. Isolamento de Classpath no Gradle (`sourceSets.core`)
-No arquivo [`build.gradle`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/build.gradle#L28-L55), o conjunto `sourceSets.core` compila **exclusivamente** com a biblioteca padrão do **Java 21** e `com.google.code.gson:gson:2.10.1`.
+No arquivo [`build.gradle`](build.gradle#L28-L55), o conjunto `sourceSets.core` compila **exclusivamente** com a biblioteca padrão do **Java 21** e `com.google.code.gson:gson:2.10.1`.
 * **Regra de Isolamento:** Nenhuma classe dentro de `com.ftbtranslator.core.*` pode importar `net.minecraft.*`, `com.mojang.*` ou `net.neoforged.*`. Se alguém tentar adicionar um import do Minecraft no `core`, a task `:compileCoreJava` falha imediatamente em tempo de compilação.
 * **Portabilidade Multi-Loader:** Graças a esse isolamento, **~90% do código do mod (25 classes do `core`) já é 100% compatível com Fabric, Quilt, Forge e NeoForge em qualquer versão moderna do Minecraft (1.18.2 a 1.21.4+)**. Para compilar para outro loader, basta reimplementar as 6 classes leves do pacote adaptador.
 
@@ -129,7 +129,7 @@ ftbtranslator/
 
 ## 3. Pipeline Completo de Funcionamento (As 5 Frentes e 5 Fases)
 
-Quando o usuário clica em **"Iniciar Tradução"** na [`TranslatorDashboardScreen`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java) ou executa `/ftbtranslate start`, o método [`TranslationService.runSynchronously`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/TranslationService.java#L152-L575) executa em uma thread daemon dedicada (`FTBTranslator-Worker`) seguindo **5 fases bem definidas**:
+Quando o usuário clica em **"Iniciar Tradução"** na [`TranslatorDashboardScreen`](src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java) ou executa `/ftbtranslate start`, o método [`TranslationService.runSynchronously`](src/core/java/com/ftbtranslator/core/TranslationService.java#L152-L575) executa em uma thread daemon dedicada (`FTBTranslator-Worker`) seguindo **5 fases bem definidas**:
 
 ```mermaid
 flowchart LR
@@ -140,54 +140,54 @@ flowchart LR
 ```
 
 ### Fase 1: Descoberta e Extração Multi-Frente (Scan + Merge Multi-Idioma)
-1. O serviço carrega o [`TranslationCache`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/cache/TranslationCache.java) configurado com o contexto temático ativo (`DEFAULT`, `TENSURA`, `TECH`, `MAGIC` ou `CUSTOM`).
-2. O [`JarModExtractor.indexModJars`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/JarModExtractor.java#L60-L155) indexa todos os `.jar` de `mods/` (incluindo sub-mods aninhados em `META-INF/jars/*.jar` e `META-INF/jarjar/*.jar`), realizando **Merge Multi-Idioma por Prioridade** (`en_us` complementado por `ja_jp`, `zh_cn`, etc., para chaves ausentes ou vazias).
-3. Em seguida, os scanners de cada frente habilitada ([`FtbQuestsTranslator`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/FtbQuestsTranslator.java), [`KubeJsTranslator`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/KubeJsTranslator.java), [`PatchouliTranslator`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/PatchouliTranslator.java) e [`JarModExtractor`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/JarModExtractor.java)) geram a lista de tarefas [`PendingOutputTask`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/PendingOutputTask.java).
+1. O serviço carrega o [`TranslationCache`](src/core/java/com/ftbtranslator/core/cache/TranslationCache.java) configurado com o contexto temático ativo (`DEFAULT`, `TENSURA`, `TECH`, `MAGIC` ou `CUSTOM`).
+2. O [`JarModExtractor.indexModJars`](src/core/java/com/ftbtranslator/core/parser/JarModExtractor.java#L60-L155) indexa todos os `.jar` de `mods/` (incluindo sub-mods aninhados em `META-INF/jars/*.jar` e `META-INF/jarjar/*.jar`), realizando **Merge Multi-Idioma por Prioridade** (`en_us` complementado por `ja_jp`, `zh_cn`, etc., para chaves ausentes ou vazias).
+3. Em seguida, os scanners de cada frente habilitada ([`FtbQuestsTranslator`](src/core/java/com/ftbtranslator/core/parser/FtbQuestsTranslator.java), [`KubeJsTranslator`](src/core/java/com/ftbtranslator/core/parser/KubeJsTranslator.java), [`PatchouliTranslator`](src/core/java/com/ftbtranslator/core/parser/PatchouliTranslator.java) e [`JarModExtractor`](src/core/java/com/ftbtranslator/core/parser/JarModExtractor.java)) geram a lista de tarefas [`PendingOutputTask`](src/core/java/com/ftbtranslator/core/parser/PendingOutputTask.java).
 
 ### Fase 2: Mascaramento Determinístico (`TokenMasker`) e Filtro Técnico Local
-1. Cada string extraída passa por [`TokenMasker.mask(String)`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/text/TokenMasker.java#L54-L98), que substitui códigos de cor, tags do FTB Quests, macros do Patchouli, quebras de linha e placeholders Java por tokens `__TK0__`, `__TK1__`, etc.
+1. Cada string extraída passa por [`TokenMasker.mask(String)`](src/core/java/com/ftbtranslator/core/text/TokenMasker.java#L54-L98), que substitui códigos de cor, tags do FTB Quests, macros do Patchouli, quebras de linha e placeholders Java por tokens `__TK0__`, `__TK1__`, etc.
 2. Se a string possuir 2 ou mais placeholders não-indexados (`%s`, `%d`, `%f`), o `TokenMasker` converte-os automaticamente para a forma posicional (`%1$s`, `%2$d`, `%3$s`) para suportar inversões gramaticais na tradução.
-3. O método [`MaskedText.hasTranslatableContent()`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/text/MaskedText.java#L38-L106) filtra localmente strings puramente técnicas (IDs `namespace:item`, `snake_case`, URLs, números com unidades `100 FE/t`), resolvendo-as na hora sem gastar tokens de IA.
+3. O método [`MaskedText.hasTranslatableContent()`](src/core/java/com/ftbtranslator/core/text/MaskedText.java#L38-L106) filtra localmente strings puramente técnicas (IDs `namespace:item`, `snake_case`, URLs, números com unidades `100 FE/t`), resolvendo-as na hora sem gastar tokens de IA.
 
 ### Fase 3: Desduplicação (`__TPL__`), Consulta ao Cache SHA-256 e Montagem de Lotes Adaptativos
-1. O serviço consulta o [`TranslationCache`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/cache/TranslationCache.java) usando a chave isolada por contexto: `SHA-256(contextPreset + "|" + customPromptHash + "|" + sourceText)`.
+1. O serviço consulta o [`TranslationCache`](src/core/java/com/ftbtranslator/core/cache/TranslationCache.java) usando a chave isolada por contexto: `SHA-256(contextPreset + "|" + customPromptHash + "|" + sourceText)`.
 2. Strings não encontradas diretamente são verificadas pelo seu template mascarado (`__TPL__` + `masked.masked()`) e agrupadas em `originalsByTemplate`. Assim, frases idênticas que diferem apenas nas cores ou macros são traduzidas **uma única vez**.
 3. Qualquer arquivo cujas strings já estejam 100% resolvidas pelo cache é gravado em disco imediatamente antes mesmo de iniciar chamadas HTTP.
-4. Os templates restantes são agrupados por [`TranslationService.buildAdaptiveBatches`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/TranslationService.java#L525-L580) em lotes de até **80 strings curtas** (ou até **15 strings longas** `> 300` caracteres, respeitando o teto de caracteres por lote).
+4. Os templates restantes são agrupados por [`TranslationService.buildAdaptiveBatches`](src/core/java/com/ftbtranslator/core/TranslationService.java#L525-L580) em lotes de até **80 strings curtas** (ou até **15 strings longas** `> 300` caracteres, respeitando o teto de caracteres por lote).
 
 ### Fase 4: Tradução Assíncrona em Lotes (Round-Robin, Rate-Limiter, Split-on-Timeout e Flush Periódico)
-1. Para cada lote, o cliente de IA ativo ([`GeminiTranslationClient`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/api/GeminiTranslationClient.java) ou [`OpenAiCompatibleClient`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/api/OpenAiCompatibleClient.java)) envia um objeto JSON indexado (`{"0": "...", "1": "..."}`) acompanhado do System Prompt temático.
-2. Em caso de timeout ou resposta truncada em lotes grandes, [`translateBatchResilient`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/TranslationService.java#L480-L523) divide o lote automaticamente ao meio (`left` e `right`) e traduz cada metade recursivamente.
-3. Para evitar *Disk Thrashing* em caches grandes (15–30 MB), [`cache.flushIfDueAfterBatch()`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/cache/TranslationCache.java#L156-L169) grava o arquivo `cache_pt_br.json` em disco apenas a cada **10 lotes concluídos** ou quando decorridos **30 segundos** desde o último save — e o bloco `finally` do `TranslationService` executa obrigatoriamente `cache.flush()` ao concluir, pausar, cancelar ou falhar.
+1. Para cada lote, o cliente de IA ativo ([`GeminiTranslationClient`](src/core/java/com/ftbtranslator/core/api/GeminiTranslationClient.java) ou [`OpenAiCompatibleClient`](src/core/java/com/ftbtranslator/core/api/OpenAiCompatibleClient.java)) envia um objeto JSON indexado (`{"0": "...", "1": "..."}`) acompanhado do System Prompt temático.
+2. Em caso de timeout ou resposta truncada em lotes grandes, [`translateBatchResilient`](src/core/java/com/ftbtranslator/core/TranslationService.java#L480-L523) divide o lote automaticamente ao meio (`left` e `right`) e traduz cada metade recursivamente.
+3. Para evitar *Disk Thrashing* em caches grandes (15–30 MB), [`cache.flushIfDueAfterBatch()`](src/core/java/com/ftbtranslator/core/cache/TranslationCache.java#L156-L169) grava o arquivo `cache_pt_br.json` em disco apenas a cada **10 lotes concluídos** ou quando decorridos **30 segundos** desde o último save — e o bloco `finally` do `TranslationService` executa obrigatoriamente `cache.flush()` ao concluir, pausar, cancelar ou falhar.
 
 ### Fase 5: Desmascaramento Validado (`unmask`), Gravação Atômica, Resource Pack e Auto-Reload
-1. Cada tradução recebida passa por [`TokenMasker.unmask(translated, masked)`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/text/TokenMasker.java#L105-L141), que verifica se 100% dos marcadores `__TK0__..__TKn__` foram preservados e restaura os códigos originais de cada string.
-2. Ao final de cada lote, qualquer [`PendingOutputTask`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/PendingOutputTask.java) cujas strings pendentes tenham zerado é gravada incrementalmente em disco via escrita atômica (`.tmp` -> `ATOMIC_MOVE`).
-3. O [`ResourcePackGenerator.ensurePackMcmeta`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/pack/ResourcePackGenerator.java) garante o `pack.mcmeta` válido em `resourcepacks/AutoTranslated_Pack_PTBR/`, e a camada NeoForge aciona [`ResourcePackApplier.applyAndReload`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/main/java/com/ftbtranslator/neoforge/ResourcePackApplier.java) na Main Client Thread.
+1. Cada tradução recebida passa por [`TokenMasker.unmask(translated, masked)`](src/core/java/com/ftbtranslator/core/text/TokenMasker.java#L105-L141), que verifica se 100% dos marcadores `__TK0__..__TKn__` foram preservados e restaura os códigos originais de cada string.
+2. Ao final de cada lote, qualquer [`PendingOutputTask`](src/core/java/com/ftbtranslator/core/parser/PendingOutputTask.java) cujas strings pendentes tenham zerado é gravada incrementalmente em disco via escrita atômica (`.tmp` -> `ATOMIC_MOVE`).
+3. O [`ResourcePackGenerator.ensurePackMcmeta`](src/core/java/com/ftbtranslator/core/pack/ResourcePackGenerator.java) garante o `pack.mcmeta` válido em `resourcepacks/AutoTranslated_Pack_PTBR/`, e a camada NeoForge aciona [`ResourcePackApplier.applyAndReload`](src/main/java/com/ftbtranslator/neoforge/ResourcePackApplier.java) na Main Client Thread.
 
 ---
 
 ## 4. As 5 Frentes de Tradução e Comportamento Singleplayer vs. Multiplayer
 
 ### Frente 1: FTB Quests — Arquivos de Idioma (`config/ftbquests/quests/lang/`)
-* **Classes:** [`FtbQuestsTranslator.java`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/FtbQuestsTranslator.java) + [`SnbtParser.java`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/SnbtParser.java).
-* **Merge Multi-Idioma:** Carrega todos os arquivos `<locale>.snbt` (e subpastas `lang/<locale>/*.snbt`) na ordem de `sourceLanguagePriority` (`en_us`, `ja_jp`, `zh_cn`...) via [`SnbtParser.mergeLangSnbtDocuments`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/SnbtParser.java#L92-L163), preenchendo chaves ausentes ou em branco no `en_us.snbt` com os valores dos idiomas secundários antes de gerar `pt_br.snbt`.
+* **Classes:** [`FtbQuestsTranslator.java`](src/core/java/com/ftbtranslator/core/parser/FtbQuestsTranslator.java) + [`SnbtParser.java`](src/core/java/com/ftbtranslator/core/parser/SnbtParser.java).
+* **Merge Multi-Idioma:** Carrega todos os arquivos `<locale>.snbt` (e subpastas `lang/<locale>/*.snbt`) na ordem de `sourceLanguagePriority` (`en_us`, `ja_jp`, `zh_cn`...) via [`SnbtParser.mergeLangSnbtDocuments`](src/core/java/com/ftbtranslator/core/parser/SnbtParser.java#L92-L163), preenchendo chaves ausentes ou em branco no `en_us.snbt` com os valores dos idiomas secundários antes de gerar `pt_br.snbt`.
 
 ### Frente 2: FTB Quests — Capítulos e Tabelas Hardcoded (`chapters/*.snbt` e `reward_tables/*.snbt`)
-* **Classes:** [`FtbQuestsTranslator.java`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/FtbQuestsTranslator.java) + [`SnbtParser.extractHardcodedQuestSpans`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/SnbtParser.java#L256-L290).
+* **Classes:** [`FtbQuestsTranslator.java`](src/core/java/com/ftbtranslator/core/parser/FtbQuestsTranslator.java) + [`SnbtParser.extractHardcodedQuestSpans`](src/core/java/com/ftbtranslator/core/parser/SnbtParser.java#L256-L290).
 * **Funcionamento:** Extrai textos diretos nos campos `"title"`, `"subtitle"` e `"description"`, ignorando referências de chave no formato `{chave.de.traducao}`. Cria backup automático único em `config/ftbquests/quests_backup_original/` antes de modificar qualquer arquivo.
 
 ### Frente 3: KubeJS, Paxi e OpenLoader (`kubejs/assets/*/lang/`, etc.)
-* **Classe:** [`KubeJsTranslator.java`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/KubeJsTranslator.java).
+* **Classe:** [`KubeJsTranslator.java`](src/core/java/com/ftbtranslator/core/parser/KubeJsTranslator.java).
 * **Funcionamento:** Varre `kubejs/assets/*/lang/`, `config/paxi/resourcepacks/*/assets/*/lang/` e `openloader/resources/*/assets/*/lang/`. Combina todos os `<locale>.json` da pasta por ordem de prioridade, desduplica contra os `.jar` de `mods/` e grava `pt_br.json`.
 
 ### Frente 4: Extrator de Mods (`.jar`), Sub-Mods Aninhados e Delta Translation
-* **Classe:** [`JarModExtractor.java`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/JarModExtractor.java).
+* **Classe:** [`JarModExtractor.java`](src/core/java/com/ftbtranslator/core/parser/JarModExtractor.java).
 * **Funcionamento:** Lê todos os `.jar` de `mods/` (somente leitura via `ZipFile`) e `.jar` aninhados (`META-INF/jars/*.jar` do Fabric/Quilt e `META-INF/jarjar/*.jar` do NeoForge/Forge). Realiza merge multi-idioma entre os arquivos `lang/<locale>.json` do mod e aplica **Delta Translation** quando `skipAlreadyTranslatedMods` está ativo, traduzindo apenas as chaves ausentes no `pt_br.json` original e salvando em `resourcepacks/AutoTranslated_Pack_PTBR/assets/<namespace>/lang/pt_br.json`.
 
 ### Frente 5: Livros de Guia do Patchouli (`patchouli_books`)
-* **Classe:** [`PatchouliTranslator.java`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/PatchouliTranslator.java).
-* **Funcionamento:** Varre livros dentro de `mods/*.jar`, `kubejs/assets/*/patchouli_books/` e na pasta raiz `patchouli_books/`, mesclando entradas e campos faltantes entre idiomas (`en_us`, `ja_jp`, `zh_cn`) via [`mergePatchouliJsonDocuments`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/parser/PatchouliTranslator.java#L313-L364). Traduz estritamente os campos textuais (`"name"`, `"subtitle"`, `"title"`, `"description"`, `"landing_text"`, `"text"`, `"header"`), preservando intocados todos os campos técnicos (`"type"`, `"icon"`, `"category"`, `"advancement"`, `"flag"`, `"recipe"`, `"item"`).
+* **Classe:** [`PatchouliTranslator.java`](src/core/java/com/ftbtranslator/core/parser/PatchouliTranslator.java).
+* **Funcionamento:** Varre livros dentro de `mods/*.jar`, `kubejs/assets/*/patchouli_books/` e na pasta raiz `patchouli_books/`, mesclando entradas e campos faltantes entre idiomas (`en_us`, `ja_jp`, `zh_cn`) via [`mergePatchouliJsonDocuments`](src/core/java/com/ftbtranslator/core/parser/PatchouliTranslator.java#L313-L364). Traduz estritamente os campos textuais (`"name"`, `"subtitle"`, `"title"`, `"description"`, `"landing_text"`, `"text"`, `"header"`), preservando intocados todos os campos técnicos (`"type"`, `"icon"`, `"category"`, `"advancement"`, `"flag"`, `"recipe"`, `"item"`).
 
 ### 4.1. Comportamento em Singleplayer vs. Multiplayer (Servidores Dedicados)
 
@@ -204,7 +204,7 @@ flowchart LR
 ## 5. Blindagem de Formatação (`TokenMasker`) e Otimizações de Tokens/Velocidade
 
 ### 5.1. Blindagem Determinística (`TokenMasker` e `MaskedText`)
-Antes de qualquer string ser enviada para a IA, [`TokenMasker.mask(String)`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/text/TokenMasker.java#L54-L98) substitui padrões técnicos por placeholders curtos (`__TK0__`, `__TK1__`, etc.):
+Antes de qualquer string ser enviada para a IA, [`TokenMasker.mask(String)`](src/core/java/com/ftbtranslator/core/text/TokenMasker.java#L54-L98) substitui padrões técnicos por placeholders curtos (`__TK0__`, `__TK1__`, etc.):
 
 | Categoria Protegida | Padrões e Exemplos Capturados (Substituídos por `__TK0__`, `__TK1__`...) |
 | :--- | :--- |
@@ -224,14 +224,14 @@ Antes de qualquer string ser enviada para a IA, [`TokenMasker.mask(String)`](fil
    * O hash de cache inclui o contexto ativo (`SHA-256(contextPreset + "|" + customPromptHash + "|" + sourceText)`), garantindo que trocar de `DEFAULT` para `TENSURA` (ou `TECH`/`MAGIC`/`CUSTOM`) gere traduções fiéis ao novo glossário.
    * O cache controla `dirtyCount` e `lastSaveTimestamp`, salvando no disco apenas a cada **10 lotes concluídos** (ou a cada **30 segundos**) durante o loop e executando `cache.flush()` obrigatoriamente no bloco `finally` do `TranslationService`.
 4. **Pool Oficial Estável Gemini + Fallback Imediato de `thinkingConfig` (HTTP 400):**
-   * O [`GeminiTranslationClient`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/core/java/com/ftbtranslator/core/api/GeminiTranslationClient.java) prioriza os modelos oficiais estáveis (`gemini-2.5-flash`, `gemini-2.5-flash-lite`, seguidos por `gemini-3.1-flash-lite`, `gemini-3.5-flash-lite`, `gemini-3.5-flash` e `gemini-2.0-flash`) em rodízio *Round-Robin* com `RateLimiter` independente por modelo.
+   * O [`GeminiTranslationClient`](src/core/java/com/ftbtranslator/core/api/GeminiTranslationClient.java) prioriza os modelos oficiais estáveis (`gemini-2.5-flash`, `gemini-2.5-flash-lite`, seguidos por `gemini-3.1-flash-lite`, `gemini-3.5-flash-lite`, `gemini-3.5-flash` e `gemini-2.0-flash`) em rodízio *Round-Robin* com `RateLimiter` independente por modelo.
    * Caso algum endpoint/modelo rejeite o bloco `"thinkingConfig": {"thinkingLevel": "MINIMAL"}` com `HTTP 400 Bad Request`, o cliente marca a flag de incompatibilidade em `thinkingConfigDisabledModels` para aquele modelo e **reenvia imediatamente na mesma chamada** sem o bloco `thinkingConfig`.
 
 ---
 
 ## 6. Interface Gráfica (GUI), Comandos e Sistema de Bundle (`.zip`)
 
-* **Atalho `F9` e Menu `Mods -> Config` ([`TranslatorDashboardScreen`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java)):** Permite alternar provedor (`Google Gemini`, `Groq`, `OpenRouter`, `OpenAI`, `Ollama Local`), colar/testar a API Key, abrir o guia passo a passo ([`ApiKeyGuideScreen`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/main/java/com/ftbtranslator/neoforge/gui/ApiKeyGuideScreen.java)), ativar/desativar as 4 frentes, escolher o Contexto (`Padrão` por default, ou `Tensura` auto-detectado quando o mod Tensura está presente), pausar/retomar/cancelar com trava de segurança dos botões de configuração durante a execução, e acionar **Exportar** / **Importar**.
+* **Atalho `F9` e Menu `Mods -> Config` ([`TranslatorDashboardScreen`](src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java)):** Permite alternar provedor (`Google Gemini`, `Groq`, `OpenRouter`, `OpenAI`, `Ollama Local`), colar/testar a API Key, abrir o guia passo a passo ([`ApiKeyGuideScreen`](src/main/java/com/ftbtranslator/neoforge/gui/ApiKeyGuideScreen.java)), ativar/desativar as 4 frentes, escolher o Contexto (`Padrão` por default, ou `Tensura` auto-detectado quando o mod Tensura está presente), pausar/retomar/cancelar com trava de segurança dos botões de configuração durante a execução, e acionar **Exportar** / **Importar**.
 * **Bundle Compartilhável (`exports/Traducao_Modpack_PTBR.zip`):** Compacta e importa todas as traduções e o Resource Pack `AutoTranslated_Pack_PTBR` com validação anti-*Zip-Slip* e recarregamento automático sem precisar de API Key.
 * **Comandos Client-Side (`/ftbtranslate`):** Subcomandos `start [all|quests|kubejs|mods|patchouli]`, `pause`, `cancel`, `status`, `reload`, `export` e `import [caminho]`.
 
@@ -247,7 +247,7 @@ Antes de qualquer string ser enviada para a IA, [`TokenMasker.mask(String)`](fil
 ## 8. Roadmap de Evolução Futura (Próximas Etapas Planejadas)
 
 ### 8.1. Reformulação de UX/UI Orientada ao Usuário Leigo
-* Reestruturação visual da [`TranslatorDashboardScreen`](file:///C:/Users/nicol/.gemini/antigravity/scratch/ftbtranslator/src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java) com foco em usabilidade imediata e adição de **Tooltips explicativos ao passar o mouse (*Hover Tooltips*)** sobre cada opção (`FTB Quests`, `KubeJS`, `Mods .jar`, `Patchouli`, `Delta Translation`, `Contexto`), explicando em linguagem simples e acessível o que cada tecnologia representa dentro do jogo para que jogadores sem conhecimento técnico saibam exatamente o que selecionar.
+* Reestruturação visual da [`TranslatorDashboardScreen`](src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java) com foco em usabilidade imediata e adição de **Tooltips explicativos ao passar o mouse (*Hover Tooltips*)** sobre cada opção (`FTB Quests`, `KubeJS`, `Mods .jar`, `Patchouli`, `Delta Translation`, `Contexto`), explicando em linguagem simples e acessível o que cada tecnologia representa dentro do jogo para que jogadores sem conhecimento técnico saibam exatamente o que selecionar.
 
 ### 8.2. Motor de Cache de Segunda Geração e Otimização Extrema de Tokens
 * Pesquisa e implementação de técnicas avançadas de aproveitamento de cache — incluindo pré-aquecimento de dicionários com termos recorrentes de mods de Minecraft, compressão de payload JSON em trânsito e armazenamento incremental — visando reduzir ainda mais o consumo de tokens de IA e acelerar drasticamente a primeira tradução de modpacks gigantes.

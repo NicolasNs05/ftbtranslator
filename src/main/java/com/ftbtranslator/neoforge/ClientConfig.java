@@ -39,6 +39,8 @@ public final class ClientConfig {
     public static final ModConfigSpec.ConfigValue<String> TARGET_LANGUAGE;
     public static final ModConfigSpec.ConfigValue<List<? extends String>> SOURCE_LANGUAGES;
 
+    public static final ModConfigSpec.BooleanValue USE_OFFICIAL_GLOSSARY;
+
     static {
         ModConfigSpec.Builder b = new ModConfigSpec.Builder();
 
@@ -94,6 +96,12 @@ public final class ClientConfig {
                         o -> o instanceof String s && !s.isBlank());
         b.pop();
 
+        b.comment("Glossário Oficial").push("glossary");
+        USE_OFFICIAL_GLOSSARY = b.comment("Reaproveitar as traduções pt_br que os próprios mods já trazem: textos "
+                        + "idênticos são resolvidos sem IA e os termos oficiais entram no prompt")
+                .define("useOfficialGlossary", true);
+        b.pop();
+
         SPEC = b.build();
     }
 
@@ -142,6 +150,7 @@ public final class ClientConfig {
         data.setTargetLanguage(TARGET_LANGUAGE.get());
         List<String> srcLangs = SOURCE_LANGUAGES.get().stream().map(String::valueOf).toList();
         data.setSourceLanguages(srcLangs);
+        data.setUseOfficialGlossary(USE_OFFICIAL_GLOSSARY.get());
         return data;
     }
 
@@ -174,6 +183,7 @@ public final class ClientConfig {
         SKIP_ALREADY_TRANSLATED_MODS.set(data.isSkipAlreadyTranslatedMods());
         TARGET_LANGUAGE.set(data.getTargetLanguage());
         SOURCE_LANGUAGES.set(data.getSourceLanguages());
+        USE_OFFICIAL_GLOSSARY.set(data.isUseOfficialGlossary());
         SPEC.save();
     }
 }

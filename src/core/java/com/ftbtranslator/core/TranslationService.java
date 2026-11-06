@@ -205,7 +205,7 @@ public final class TranslationService {
             }
 
             updateProgress(callback, new ProgressSnapshot(
-                    "Escaneando arquivos", "Iniciando varredura...", 0, 0, 0, 0, 0, 0, 0, 0, true, false));
+                    "Escaneando arquivos", "Iniciando varredura...", 0, 0, 0, 0, 0, 0, 0, 0, 0, true, false));
             log(callback, LogLevel.INFO, "Iniciando tradução (" + config.getProvider().displayName()
                     + " / " + config.effectiveModel() + " / Contexto: " + config.getContextPreset().displayName() + ")");
 
@@ -214,9 +214,14 @@ public final class TranslationService {
             // Index mod jars once so KubeJS and Mods can share en_us/pt_br keys without duplicate translations.
             // Always indexed: the official pt_br files shipped inside the jars feed the human-made glossary
             // that every front (Quests, KubeJS, Patchouli, Mods) reuses before spending AI tokens.
-            token.checkpoint();
-            Map<String, JarModExtractor.NamespaceLangAccumulator> jarIndex =
-                    JarModExtractor.indexModJars(paths, config, glossary, callback);
+            // When the glossary is disabled, jars are only indexed for the fronts that need them.
+            Map<String, JarModExtractor.NamespaceLangAccumulator> jarIndex = Map.of();
+            if (config.isUseOfficialGlossary()
+                    || scopes.contains(TranslationScope.MODS) || scopes.contains(TranslationScope.KUBEJS)) {
+                token.checkpoint();
+                jarIndex = JarModExtractor.indexModJars(
+                        paths, config, config.isUseOfficialGlossary() ? glossary : null, callback);
+            }
             if (!glossary.isEmpty()) {
                 log(callback, LogLevel.INFO, "Glossário oficial: " + glossary.size()
                         + " termo(s) com tradução humana encontrados nos mods.");
@@ -358,7 +363,7 @@ public final class TranslationService {
                             "Traduzindo com IA",
                             "Lote " + currentBatchNum + "/" + batchTotal + " (" + batchEntries.size() + " textos)",
                             currentBatchNum, batchTotal, stringsTotal,
-                            stringsTranslated + stringsFailed, stringsFromCache, stringsFailed,
+                            stringsTranslated + stringsFailed, stringsFromCache, stringsFromGlossary, stringsFailed,
                             tasksTotal, tasksWritten, true, token.isPaused()));
 
                     List<String> batchTexts = new ArrayList<>(batchEntries.size());
@@ -453,7 +458,7 @@ public final class TranslationService {
                             "Lote " + currentBatchNum + "/" + batchTotal + " concluído ("
                                     + (stringsTranslated + stringsFailed) + "/" + stringsTotal + " strings)",
                             currentBatchNum, batchTotal, stringsTotal,
-                            stringsTranslated + stringsFailed, stringsFromCache, stringsFailed,
+                            stringsTranslated + stringsFailed, stringsFromCache, stringsFromGlossary, stringsFailed,
                             tasksTotal, tasksWritten, true, token.isPaused()));
                 }
             }
@@ -469,7 +474,7 @@ public final class TranslationService {
                         "Gravando arquivos",
                         task.displayPath(),
                         batchTotal, batchTotal, stringsTotal,
-                        stringsTranslated + stringsFailed, stringsFromCache, stringsFailed,
+                        stringsTranslated + stringsFailed, stringsFromCache, stringsFromGlossary, stringsFailed,
                         tasksTotal, tasksWritten, true, token.isPaused()));
 
                 task.writeOutput(src -> resolvedTranslations.getOrDefault(src, src));
@@ -504,7 +509,7 @@ public final class TranslationService {
 
             updateProgress(callback, new ProgressSnapshot(
                     "Concluído", summary, batchTotal, batchTotal, stringsTotal,
-                    stringsTranslated + stringsFailed, stringsFromCache, stringsFailed,
+                    stringsTranslated + stringsFailed, stringsFromCache, stringsFromGlossary, stringsFailed,
                     tasksTotal, tasksWritten, false, false));
 
             if (callback != null) {
@@ -546,7 +551,7 @@ public final class TranslationService {
                     stringsTranslated, stringsFromCache, stringsFailed,
                     questsChanged, resourcePackChanged, duration);
             updateProgress(callback, new ProgressSnapshot(
-                    "Cancelado", msg, 0, 0, 0, stringsTranslated, stringsFromCache, stringsFailed,
+                    "Cancelado", msg, 0, 0, 0, stringsTranslated, stringsFromCache, stringsFromGlossary, stringsFailed,
                     tasksTotal, tasksWritten, false, false));
             if (callback != null) {
                 callback.onComplete(report);
@@ -581,7 +586,7 @@ public final class TranslationService {
             String msg = "Erro durante a tradução: " + ex.getMessage();
             log(callback, LogLevel.ERROR, msg);
             updateProgress(callback, new ProgressSnapshot(
-                    "Erro", msg, 0, 0, 0, stringsTranslated, stringsFromCache, stringsFailed,
+                    "Erro", msg, 0, 0, 0, stringsTranslated, stringsFromCache, stringsFromGlossary, stringsFailed,
                     tasksTotal, tasksWritten, false, false));
             if (callback != null) {
                 callback.onError(msg, ex);

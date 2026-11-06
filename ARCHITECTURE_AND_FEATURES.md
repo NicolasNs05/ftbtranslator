@@ -248,7 +248,12 @@ Antes de qualquer string ser enviada para a IA, [`TokenMasker.mask(String)`](src
 ## 8. Roadmap de Evolução Futura (Próximas Etapas Planejadas)
 
 ### 8.1. Reformulação de UX/UI Orientada ao Usuário Leigo
-* Reestruturação visual da [`TranslatorDashboardScreen`](src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java) com foco em usabilidade imediata e adição de **Tooltips explicativos ao passar o mouse (*Hover Tooltips*)** sobre cada opção (`FTB Quests`, `KubeJS`, `Mods .jar`, `Patchouli`, `Delta Translation`, `Contexto`), explicando em linguagem simples e acessível o que cada tecnologia representa dentro do jogo para que jogadores sem conhecimento técnico saibam exatamente o que selecionar.
+* **Implementado — Painel em Abas com Tooltips:** a [`TranslatorDashboardScreen`](src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java) foi dividida em 4 abas, todas com *Hover Tooltips* em linguagem simples:
+  * **Início:** status da API Key, perfil de contexto, métricas de eficiência em tempo real (Cache / Glossário / IA / Falhas e % resolvido sem IA) e os botões de execução.
+  * **Conteúdo:** frentes de tradução, *Delta Translation* e filtro de mods com contador dinâmico (`N de M mods`, mesma regra de nome do `.jar` ou namespace usada na tradução).
+  * **IA & Glossário:** provedor, API Key, teste de conexão, guia de chave gratuita e a opção `useOfficialGlossary`.
+  * **Pacotes (.zip):** exportar, importar, abrir a pasta `exports/` e avisos sobre servidores multiplayer dedicados.
+  * A barra de progresso e a linha de status aparecem em todas as abas. O `ProgressSnapshot` ganhou `stringsFromGlossary` para separar as métricas.
 
 ### 8.2. Motor de Cache de Segunda Geração e Otimização Extrema de Tokens
 * **Implementado — Glossário Oficial:** os `pt_br.json` que os próprios mods já trazem (tradução humana) alimentam o [`TranslationGlossary`](src/core/java/com/ftbtranslator/core/cache/TranslationGlossary.java). Textos idênticos em qualquer frente são resolvidos sem IA (validando placeholders), e termos curtos encontrados no lote são injetados no prompt para manter a terminologia oficial. Arquivos `pt_br` que são só cópia do `en_us` são ignorados; divergências são resolvidas por votação.

@@ -610,6 +610,21 @@ class EndToEndCoreTest {
             assertFalse(systemPrompts.isEmpty());
             assertTrue(systemPrompts.stream().anyMatch(p -> p.contains("Iron Plate = Placa de Ferro")),
                     systemPrompts.toString());
+
+            // Dashboard metrics: the glossary hit is reported separately from cache and AI.
+            ProgressSnapshot done = service.latestSnapshot();
+            assertEquals(1, done.stringsFromGlossary());
+            assertTrue(done.stringsFromCache() >= done.stringsFromGlossary());
+            assertEquals(2, done.stringsTranslatedByAi());
+
+            // With the glossary disabled, the same text goes to the AI.
+            Files.delete(questsLangDir.resolve("pt_br.snbt"));
+            Files.delete(service.paths().cacheFile("pt_br"));
+            sentTexts.clear();
+            cfg.setUseOfficialGlossary(false);
+            assertTrue(service.runSynchronously(cfg, EnumSet.of(TranslationScope.FTBQUESTS), null).success());
+            assertTrue(sentTexts.contains("Energy"), sentTexts.toString());
+            assertEquals(0, service.latestSnapshot().stringsFromGlossary());
         } finally {
             server.stop(0);
         }
@@ -745,6 +760,31 @@ class EndToEndCoreTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void modFilterCounterMatchesJarNamesAndNamespacesLikeTheRun(@TempDir Path tempRoot) throws Exception {
+        Path instance = tempRoot.resolve("instance");
+        Path modsDir = instance.resolve("mods");
+        Files.createDirectories(modsDir);
+        try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(modsDir.resolve("tensura-2.0.jar")))) {
+            writeZipText(zos, "assets/tensura/lang/en_us.json", "{}");
+            writeZipText(zos, "assets/manascore/lang/en_us.json", "{}");
+        }
+        try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(modsDir.resolve("jei-19.jar")))) {
+            writeZipText(zos, "assets/jei/lang/en_us.json", "{}");
+        }
+        Files.writeString(modsDir.resolve("broken.jar"), "not a zip");
+        Files.writeString(modsDir.resolve("ftbtranslator-1.0.0.jar"), "self");
+
+        List<com.ftbtranslator.core.parser.JarModExtractor.ModJarInfo> jars =
+                com.ftbtranslator.core.parser.JarModExtractor.listModJars(new GamePaths(instance));
+        assertEquals(3, jars.size(), "own jar is skipped, unreadable jar still listed");
+        assertEquals(3, com.ftbtranslator.core.parser.JarModExtractor.countMatchingJars(jars, List.of()));
+        assertEquals(1, com.ftbtranslator.core.parser.JarModExtractor.countMatchingJars(jars, List.of("manas")));
+        assertEquals(2, com.ftbtranslator.core.parser.JarModExtractor.countMatchingJars(jars, List.of("tensura", "jei")));
+        assertEquals(1, com.ftbtranslator.core.parser.JarModExtractor.countMatchingJars(jars, List.of("broken")));
+        assertEquals(0, com.ftbtranslator.core.parser.JarModExtractor.countMatchingJars(jars, List.of("create")));
     }
 
     private static TranslatorConfigData mockConfig(HttpServer server) {

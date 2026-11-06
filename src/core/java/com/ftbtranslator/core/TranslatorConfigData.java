@@ -29,6 +29,7 @@ public final class TranslatorConfigData {
     private boolean patchouliEnabled = true;
     private String modFilter = "";
     private boolean skipAlreadyTranslatedMods = true;
+    private boolean useOfficialGlossary = true;
     private String targetLanguage = "pt_br";
     private List<String> sourceLanguages = new ArrayList<>(DEFAULT_SOURCE_LANGUAGES);
 
@@ -51,6 +52,7 @@ public final class TranslatorConfigData {
         c.patchouliEnabled = patchouliEnabled;
         c.modFilter = modFilter;
         c.skipAlreadyTranslatedMods = skipAlreadyTranslatedMods;
+        c.useOfficialGlossary = useOfficialGlossary;
         c.targetLanguage = targetLanguage;
         c.sourceLanguages = new ArrayList<>(sourceLanguages);
         return c;
@@ -279,6 +281,15 @@ public final class TranslatorConfigData {
 
     public void setSkipAlreadyTranslatedMods(boolean v) {
         this.skipAlreadyTranslatedMods = v;
+    }
+
+    /** Reuse the official pt_br files shipped inside mod jars as a glossary (exact match + prompt terms). */
+    public boolean isUseOfficialGlossary() {
+        return useOfficialGlossary;
+    }
+
+    public void setUseOfficialGlossary(boolean v) {
+        this.useOfficialGlossary = v;
     }
 
     public String getTargetLanguage() {

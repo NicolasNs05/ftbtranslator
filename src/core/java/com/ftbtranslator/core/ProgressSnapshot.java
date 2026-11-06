@@ -9,7 +9,9 @@ package com.ftbtranslator.core;
  * @param batchTotal       planned number of batches
  * @param stringsTotal     unique strings that need an AI translation in this run
  * @param stringsDone      strings already processed by the AI in this run
- * @param stringsFromCache unique strings resolved directly from the SHA-256 cache
+ * @param stringsFromCache unique strings resolved locally without the AI (cache, official glossary and
+ *                         technical strings that need no translation)
+ * @param stringsFromGlossary subset of {@code stringsFromCache} resolved by the official mod glossary
  * @param stringsFailed    strings whose translation was rejected (kept in the original language)
  * @param tasksTotal       output files that will be generated
  * @param tasksWritten     output files already written
@@ -24,6 +26,7 @@ public record ProgressSnapshot(
         int stringsTotal,
         int stringsDone,
         int stringsFromCache,
+        int stringsFromGlossary,
         int stringsFailed,
         int tasksTotal,
         int tasksWritten,
@@ -31,7 +34,17 @@ public record ProgressSnapshot(
         boolean paused) {
 
     public static ProgressSnapshot idle() {
-        return new ProgressSnapshot("Aguardando", "", 0, 0, 0, 0, 0, 0, 0, 0, false, false);
+        return new ProgressSnapshot("Aguardando", "", 0, 0, 0, 0, 0, 0, 0, 0, 0, false, false);
+    }
+
+    /** Strings resolved locally by the cache (and technical filter), excluding glossary hits. */
+    public int stringsFromCacheOnly() {
+        return Math.max(0, stringsFromCache - stringsFromGlossary);
+    }
+
+    /** Strings the AI actually translated successfully in this run. */
+    public int stringsTranslatedByAi() {
+        return Math.max(0, stringsDone - stringsFailed);
     }
 
     /**
@@ -64,7 +77,7 @@ public record ProgressSnapshot(
 
     public ProgressSnapshot withPaused(boolean newPaused) {
         return new ProgressSnapshot(phase, currentItem, batchIndex, batchTotal, stringsTotal, stringsDone,
-                stringsFromCache, stringsFailed, tasksTotal, tasksWritten, running, newPaused);
+                stringsFromCache, stringsFromGlossary, stringsFailed, tasksTotal, tasksWritten, running, newPaused);
     }
 
     private static double clamp(double v) {

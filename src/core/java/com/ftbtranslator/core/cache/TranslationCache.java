@@ -1,6 +1,8 @@
 package com.ftbtranslator.core.cache;
 
 import com.ftbtranslator.core.ContextPreset;
+import com.ftbtranslator.core.text.MaskedText;
+import com.ftbtranslator.core.text.TokenMasker;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
@@ -120,6 +122,42 @@ public final class TranslationCache {
             return null;
         }
         return entries.get(computeCacheKey(sourceText));
+    }
+
+    /** Prefix of the cache entries keyed by masked template ({@code __TK0__} placeholders). */
+    public static final String TEMPLATE_PREFIX = "__TPL__";
+
+    /**
+     * Resolves a cached translation for {@code sourceText}: first by the exact text (entries written by
+     * older versions, kept for compatibility), then by its masked template, which is the only form stored
+     * since the template entry already serves every color/macro variation of the same sentence.
+     *
+     * @return the translation with the original tokens restored, or {@code null} on a miss
+     */
+    public String resolve(String sourceText, TokenMasker masker) {
+        if (sourceText == null) {
+            return null;
+        }
+        String direct = get(sourceText);
+        if (direct != null && !direct.isBlank()) {
+            return direct;
+        }
+        MaskedText masked = masker.mask(sourceText);
+        return resolveTemplate(masked, masker);
+    }
+
+    /** Template-only lookup for callers that already masked the text. */
+    public String resolveTemplate(MaskedText masked, TokenMasker masker) {
+        String template = get(TEMPLATE_PREFIX + masked.masked());
+        if (template == null || template.isBlank()) {
+            return null;
+        }
+        return masker.unmask(template, masked);
+    }
+
+    /** Stores the AI translation of a masked template (still containing {@code __TKn__} placeholders). */
+    public void putTemplate(String maskedTemplate, String translatedTemplate) {
+        put(TEMPLATE_PREFIX + maskedTemplate, translatedTemplate == null ? null : translatedTemplate.strip());
     }
 
     public synchronized void put(String sourceText, String translatedText) {

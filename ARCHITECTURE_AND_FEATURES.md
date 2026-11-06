@@ -99,7 +99,8 @@ ftbtranslator/
 │   │   ├── bundle/
 │   │   │   └── TranslationBundleManager.java # Export/Import .zip anti-ZipSlip
 │   │   ├── cache/
-│   │   │   └── TranslationCache.java      # Cache SHA-256 contextual + flush
+│   │   │   ├── TranslationCache.java      # Cache SHA-256 contextual + flush
+│   │   │   └── TranslationGlossary.java   # Glossário de traduções oficiais
 │   │   ├── pack/
 │   │   │   └── ResourcePackGenerator.java # Gerador pack.mcmeta (format 15..99)
 │   │   ├── parser/
@@ -151,7 +152,7 @@ flowchart LR
 
 ### Fase 3: Desduplicação (`__TPL__`), Consulta ao Cache SHA-256 e Montagem de Lotes Adaptativos
 1. O serviço consulta o [`TranslationCache`](src/core/java/com/ftbtranslator/core/cache/TranslationCache.java) usando a chave isolada por contexto: `SHA-256(contextPreset + "|" + customPromptHash + "|" + sourceText)`.
-2. Strings não encontradas diretamente são verificadas pelo seu template mascarado (`__TPL__` + `masked.masked()`) e agrupadas em `originalsByTemplate`. Assim, frases idênticas que diferem apenas nas cores ou macros são traduzidas **uma única vez**.
+2. Strings não encontradas diretamente são verificadas pelo seu template mascarado (`__TPL__` + `masked.masked()`) e agrupadas em `originalsByTemplate`. Assim, frases idênticas que diferem apenas nas cores ou macros são traduzidas **uma única vez**. O cache grava **somente a entrada do template** (`TranslationCache.putTemplate`); o texto final de cada variação é reconstruído na leitura por `TranslationCache.resolve`, que ainda aceita entradas por texto original gravadas por versões anteriores.
 3. Qualquer arquivo cujas strings já estejam 100% resolvidas pelo cache é gravado em disco imediatamente antes mesmo de iniciar chamadas HTTP.
 4. Os templates restantes são agrupados por [`TranslationService.buildAdaptiveBatches`](src/core/java/com/ftbtranslator/core/TranslationService.java#L525-L580) em lotes de até **80 strings curtas** (ou até **15 strings longas** `> 300` caracteres, respeitando o teto de caracteres por lote).
 
@@ -250,4 +251,6 @@ Antes de qualquer string ser enviada para a IA, [`TokenMasker.mask(String)`](src
 * Reestruturação visual da [`TranslatorDashboardScreen`](src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java) com foco em usabilidade imediata e adição de **Tooltips explicativos ao passar o mouse (*Hover Tooltips*)** sobre cada opção (`FTB Quests`, `KubeJS`, `Mods .jar`, `Patchouli`, `Delta Translation`, `Contexto`), explicando em linguagem simples e acessível o que cada tecnologia representa dentro do jogo para que jogadores sem conhecimento técnico saibam exatamente o que selecionar.
 
 ### 8.2. Motor de Cache de Segunda Geração e Otimização Extrema de Tokens
+* **Implementado — Glossário Oficial:** os `pt_br.json` que os próprios mods já trazem (tradução humana) alimentam o [`TranslationGlossary`](src/core/java/com/ftbtranslator/core/cache/TranslationGlossary.java). Textos idênticos em qualquer frente são resolvidos sem IA (validando placeholders), e termos curtos encontrados no lote são injetados no prompt para manter a terminologia oficial. Arquivos `pt_br` que são só cópia do `en_us` são ignorados; divergências são resolvidas por votação.
+* **Implementado — Import seguro:** importar um bundle `.zip` é recusado enquanto uma tradução está rodando, evitando que o flush do cache em memória sobrescreva o cache importado.
 * Pesquisa e implementação de técnicas avançadas de aproveitamento de cache — incluindo pré-aquecimento de dicionários com termos recorrentes de mods de Minecraft, compressão de payload JSON em trânsito e armazenamento incremental — visando reduzir ainda mais o consumo de tokens de IA e acelerar drasticamente a primeira tradução de modpacks gigantes.

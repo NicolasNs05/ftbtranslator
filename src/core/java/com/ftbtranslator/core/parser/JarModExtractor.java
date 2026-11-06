@@ -5,6 +5,7 @@ import com.ftbtranslator.core.LogLevel;
 import com.ftbtranslator.core.TranslationCallback;
 import com.ftbtranslator.core.TranslationScope;
 import com.ftbtranslator.core.TranslatorConfigData;
+import com.ftbtranslator.core.cache.TranslationGlossary;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -67,6 +68,18 @@ public final class JarModExtractor {
     public static Map<String, NamespaceLangAccumulator> indexModJars(GamePaths paths,
                                                                      TranslatorConfigData config,
                                                                      TranslationCallback callback) throws IOException {
+        return indexModJars(paths, config, null, callback);
+    }
+
+    /**
+     * Same as {@link #indexModJars(GamePaths, TranslatorConfigData, TranslationCallback)}, additionally
+     * feeding every official target-language file shipped <b>inside the jars</b> (human translations only,
+     * never the AI-generated resource pack) into {@code glossary} when it is not {@code null}.
+     */
+    public static Map<String, NamespaceLangAccumulator> indexModJars(GamePaths paths,
+                                                                     TranslatorConfigData config,
+                                                                     TranslationGlossary glossary,
+                                                                     TranslationCallback callback) throws IOException {
         Map<String, NamespaceLangAccumulator> byNamespace = new LinkedHashMap<>();
         Path modsDir = paths.modsDir();
         if (!Files.isDirectory(modsDir)) {
@@ -118,11 +131,15 @@ public final class JarModExtractor {
                             namespace, NamespaceLangAccumulator::new);
                     mergeMissingOrBlankEntries(acc.sourceEntries, sourceMap);
                     acc.existingPtBrEntries.putAll(existingTargetMap);
+                    if (glossary != null) {
+                        glossary.addLangPair(sourceMap, existingTargetMap);
+                    }
                 }
 
                 // Universal Multi-Loader support: inspect nested Jar-in-Jar (Fabric/Quilt META-INF/jars & NeoForge/Forge META-INF/jarjar)
                 for (String nestedEntryName : nestedJarEntries) {
-                    indexNestedJar(zip, nestedEntryName, jarFileName, filterTokens, priorityLocales, targetLang, byNamespace);
+                    indexNestedJar(zip, nestedEntryName, jarFileName, filterTokens, priorityLocales, targetLang,
+                            byNamespace, glossary);
                 }
             } catch (IOException | RuntimeException ex) {
                 if (callback != null) {
@@ -250,7 +267,8 @@ public final class JarModExtractor {
                                        List<String> filterTokens,
                                        List<String> priorityLocales,
                                        String targetLang,
-                                       Map<String, NamespaceLangAccumulator> byNamespace) {
+                                       Map<String, NamespaceLangAccumulator> byNamespace,
+                                       TranslationGlossary glossary) {
         ZipEntry nestedEntry = outerZip.getEntry(nestedEntryName);
         if (nestedEntry == null || nestedEntry.getSize() > 64L * 1024L * 1024L) {
             return;
@@ -310,6 +328,9 @@ public final class JarModExtractor {
             mergeMissingOrBlankEntries(acc.sourceEntries, mergedSourceMap);
             Map<String, String> targetMap = localeMaps.get(targetLang);
             if (targetMap != null) {
+                if (glossary != null) {
+                    glossary.addLangPair(mergedSourceMap, targetMap);
+                }
                 for (Map.Entry<String, String> e : targetMap.entrySet()) {
                     acc.existingPtBrEntries.putIfAbsent(e.getKey(), e.getValue());
                 }

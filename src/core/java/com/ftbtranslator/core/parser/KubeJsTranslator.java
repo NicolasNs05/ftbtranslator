@@ -6,6 +6,7 @@ import com.ftbtranslator.core.TranslationCallback;
 import com.ftbtranslator.core.TranslationScope;
 import com.ftbtranslator.core.TranslatorConfigData;
 import com.ftbtranslator.core.cache.TranslationCache;
+import com.ftbtranslator.core.text.TokenMasker;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -32,6 +33,8 @@ import java.util.stream.Stream;
  * mod jars.
  */
 public final class KubeJsTranslator {
+
+    private static final TokenMasker TOKEN_MASKER = new TokenMasker();
 
     private KubeJsTranslator() {
     }
@@ -154,7 +157,7 @@ public final class KubeJsTranslator {
                 if (!isEnglishKubeKey) {
                     // If the foreign kubejs string was already translated in cache, bridge that translation to the
                     // mod jar's existingPtBrEntries as well so the jar doesn't re-translate the English string!
-                    String cachedFromKube = cache != null ? cache.get(val) : null;
+                    String cachedFromKube = cache != null ? cache.resolve(val, TOKEN_MASKER) : null;
                     if (cachedFromKube != null && !cachedFromKube.isBlank()) {
                         pretranslatedPtMap.put(key, cachedFromKube);
                         effectiveSourceMap.put(key, cachedFromKube);

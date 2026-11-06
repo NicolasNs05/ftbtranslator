@@ -288,13 +288,10 @@ public final class TranslationService {
                         return;
                     }
                     String templateKey = masked.masked();
-                    String cachedTemplate = cache.get("__TPL__" + templateKey);
-                    if (cachedTemplate != null && !cachedTemplate.isBlank()) {
-                        String restored = tokenMasker.unmask(cachedTemplate, masked);
-                        if (restored != null) {
-                            resolvedTranslations.put(s, restored);
-                            return;
-                        }
+                    String restored = cache.resolveTemplate(masked, tokenMasker);
+                    if (restored != null) {
+                        resolvedTranslations.put(s, restored);
+                        return;
                     }
                     toTranslate.putIfAbsent(templateKey, masked);
                     List<Map.Entry<String, MaskedText>> group = originalsByTemplate.computeIfAbsent(
@@ -402,13 +399,13 @@ public final class TranslationService {
                         List<Map.Entry<String, MaskedText>> originals = originalsByTemplate.getOrDefault(
                                 templateKey, List.of(item));
                         if (testUnmasked != null) {
-                            cache.put("__TPL__" + templateKey, rawTranslated.strip());
+                            // Only the template is cached: every original is rebuilt from it on lookup.
+                            cache.putTemplate(templateKey, rawTranslated);
                             for (Map.Entry<String, MaskedText> origEntry : originals) {
                                 String originalStr = origEntry.getKey();
                                 String unmasked = tokenMasker.unmask(rawTranslated, origEntry.getValue());
                                 if (unmasked != null) {
                                     resolvedTranslations.put(originalStr, unmasked);
-                                    cache.put(originalStr, unmasked);
                                 } else {
                                     resolvedTranslations.put(originalStr, originalStr);
                                 }

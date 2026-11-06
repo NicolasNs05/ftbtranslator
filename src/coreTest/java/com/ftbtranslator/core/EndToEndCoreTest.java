@@ -503,7 +503,7 @@ class EndToEndCoreTest {
             TranslationCache cache = new TranslationCache(service.paths().cacheFile("pt_br"), ContextPreset.TENSURA, "");
             cache.load();
             assertTrue(cache.size() >= 6);
-            assertEquals("[PT-BR] Predator Unique Skill", cache.get("Predator Unique Skill"));
+            assertEquals("[PT-BR] Predator Unique Skill", cache.resolve("Predator Unique Skill", new TokenMasker()));
 
             TranslationBundleManager.ExportResult exported = service.exportBundle("pt_br");
             assertTrue(Files.isRegularFile(exported.zipPath()));
@@ -655,6 +655,94 @@ class EndToEndCoreTest {
             assertFalse(afterRun.getMessage().contains("tradução está em andamento"), afterRun.getMessage());
         } finally {
             release.countDown();
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void cacheStoresOnlyTemplatesAndStillReadsLegacyEntries(@TempDir Path tempRoot) throws Exception {
+        Path instance = tempRoot.resolve("instance");
+        Path kubeLangDir = instance.resolve("kubejs/assets/kubejs/lang");
+        Files.createDirectories(kubeLangDir);
+        Files.writeString(kubeLangDir.resolve("en_us.json"), """
+                {
+                  "item.kubejs.ingot_gold": "&6Iron Ingot",
+                  "item.kubejs.ingot_red": "&cIron Ingot",
+                  "item.kubejs.plain": "Magic Dust"
+                }
+                """, StandardCharsets.UTF_8);
+
+        List<String> sentTexts = Collections.synchronizedList(new ArrayList<>());
+        HttpServer server = mockOpenAiServer(Collections.synchronizedList(new ArrayList<>()), sentTexts, null);
+        server.start();
+        try {
+            TranslationService service = new TranslationService(instance);
+            assertTrue(service.runSynchronously(mockConfig(server), EnumSet.of(TranslationScope.KUBEJS), null)
+                    .success());
+            // Two colors of the same sentence share one template: one AI text for them.
+            assertEquals(List.of("Magic Dust", "__TK0__Iron Ingot"), sentTexts.stream().sorted().toList());
+
+            TokenMasker masker = new TokenMasker();
+            TranslationCache cache = new TranslationCache(service.paths().cacheFile("pt_br"));
+            cache.load();
+            assertEquals(2, cache.size(), "one entry per template, no duplicate per original text");
+            assertNull(cache.get("&6Iron Ingot"));
+            assertEquals("[PT-BR] &6Iron Ingot", cache.resolve("&6Iron Ingot", masker));
+            assertEquals("[PT-BR] &cIron Ingot", cache.resolve("&cIron Ingot", masker));
+            assertEquals("[PT-BR] §aIron Ingot", cache.resolve("§aIron Ingot", masker));
+            assertEquals("[PT-BR] Magic Dust", cache.resolve("Magic Dust", masker));
+
+            // Caches written by older versions (one entry per original text) keep working.
+            cache.put("Legacy Sword", "Espada Antiga");
+            assertEquals("Espada Antiga", cache.resolve("Legacy Sword", masker));
+
+            // A second run is fully served by the cache: nothing new reaches the AI.
+            sentTexts.clear();
+            Files.delete(kubeLangDir.resolve("pt_br.json"));
+            assertTrue(service.runSynchronously(mockConfig(server), EnumSet.of(TranslationScope.KUBEJS), null)
+                    .success());
+            assertTrue(sentTexts.isEmpty(), sentTexts.toString());
+            String ptBr = Files.readString(kubeLangDir.resolve("pt_br.json"), StandardCharsets.UTF_8);
+            assertTrue(ptBr.contains("[PT-BR] &cIron Ingot"), ptBr);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void kubeJsForeignOverrideBridgesTemplateOnlyCacheToModJar(@TempDir Path tempRoot) throws Exception {
+        Path instance = tempRoot.resolve("instance");
+        Path modsDir = instance.resolve("mods");
+        Files.createDirectories(modsDir);
+        try (OutputStream fos = Files.newOutputStream(modsDir.resolve("gems.jar"));
+             ZipOutputStream zos = new ZipOutputStream(fos)) {
+            writeZipText(zos, "assets/gems/lang/en_us.json", """
+                    { "item.gems.ruby": "Ruby Shard" }
+                    """);
+        }
+        // KubeJS override in another language for the same mod key (no English kubejs file).
+        Path kubeLangDir = instance.resolve("kubejs/assets/gems/lang");
+        Files.createDirectories(kubeLangDir);
+        Files.writeString(kubeLangDir.resolve("zh_cn.json"), """
+                { "item.gems.ruby": "&c红宝石碎片" }
+                """, StandardCharsets.UTF_8);
+
+        TranslationService service = new TranslationService(instance);
+        TranslationCache seeded = new TranslationCache(service.paths().cacheFile("pt_br"));
+        seeded.putTemplate("__TK0__红宝石碎片", "__TK0__Fragmento de Rubi");
+        seeded.saveForce();
+
+        List<String> sentTexts = Collections.synchronizedList(new ArrayList<>());
+        HttpServer server = mockOpenAiServer(Collections.synchronizedList(new ArrayList<>()), sentTexts, null);
+        server.start();
+        try {
+            assertTrue(service.runSynchronously(mockConfig(server),
+                    EnumSet.of(TranslationScope.KUBEJS, TranslationScope.MODS), null).success());
+            // The cached template translation is bridged to the jar: the English text is not re-translated.
+            assertFalse(sentTexts.contains("Ruby Shard"), sentTexts.toString());
+            String kubePtBr = Files.readString(kubeLangDir.resolve("pt_br.json"), StandardCharsets.UTF_8);
+            assertTrue(kubePtBr.contains("&cFragmento de Rubi"), kubePtBr);
+        } finally {
             server.stop(0);
         }
     }

@@ -152,7 +152,7 @@ flowchart LR
 
 ### Fase 3: Desduplicação (`__TPL__`), Consulta ao Cache SHA-256 e Montagem de Lotes Adaptativos
 1. O serviço consulta o [`TranslationCache`](src/core/java/com/ftbtranslator/core/cache/TranslationCache.java) usando a chave isolada por contexto: `SHA-256(contextPreset + "|" + customPromptHash + "|" + sourceText)`.
-2. Strings não encontradas diretamente são verificadas pelo seu template mascarado (`__TPL__` + `masked.masked()`) e agrupadas em `originalsByTemplate`. Assim, frases idênticas que diferem apenas nas cores ou macros são traduzidas **uma única vez**.
+2. Strings não encontradas diretamente são verificadas pelo seu template mascarado (`__TPL__` + `masked.masked()`) e agrupadas em `originalsByTemplate`. Assim, frases idênticas que diferem apenas nas cores ou macros são traduzidas **uma única vez**. O cache grava **somente a entrada do template** (`TranslationCache.putTemplate`); o texto final de cada variação é reconstruído na leitura por `TranslationCache.resolve`, que ainda aceita entradas por texto original gravadas por versões anteriores.
 3. Qualquer arquivo cujas strings já estejam 100% resolvidas pelo cache é gravado em disco imediatamente antes mesmo de iniciar chamadas HTTP.
 4. Os templates restantes são agrupados por [`TranslationService.buildAdaptiveBatches`](src/core/java/com/ftbtranslator/core/TranslationService.java#L525-L580) em lotes de até **80 strings curtas** (ou até **15 strings longas** `> 300` caracteres, respeitando o teto de caracteres por lote).
 

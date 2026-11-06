@@ -158,38 +158,6 @@ public final class SnbtParser {
         return result;
     }
 
-    /**
-     * Reads an FTB Quests {@code lang/<locale>.snbt} document as {@code key -> values}. A plain string
-     * value becomes a single-element list; a string array keeps every element (blank ones included) so
-     * two locales of the same key can be aligned element by element.
-     */
-    public static Map<String, List<String>> extractLangValues(String snbt) {
-        Map<String, List<String>> result = new LinkedHashMap<>();
-        if (snbt == null || snbt.isEmpty()) {
-            return result;
-        }
-        for (LangKeyEntry entry : extractLangKeyEntries(snbt).values()) {
-            String slice = entry.rawValueSlice();
-            List<String> values = new ArrayList<>();
-            int p = 0;
-            int len = slice.length();
-            while (p < len) {
-                char ch = slice.charAt(p);
-                if (ch == '"' || ch == '\'') {
-                    ParsedLiteral lit = readQuotedLiteral(slice, p);
-                    values.add(lit.unescaped);
-                    p = lit.endIndex;
-                } else {
-                    p++;
-                }
-            }
-            if (!values.isEmpty()) {
-                result.put(entry.key(), values);
-            }
-        }
-        return result;
-    }
-
     private record LangKeyEntry(
             String key,
             String rawKeyToken,

@@ -22,6 +22,7 @@ public final class ClientConfig {
     public static final ModConfigSpec.ConfigValue<String> BASE_URL;
     public static final ModConfigSpec.IntValue REQUESTS_PER_MINUTE;
     public static final ModConfigSpec.BooleanValue AUTO_RATE_LIMIT;
+    public static final ModConfigSpec.ConfigValue<String> CLAUDE_EFFORT;
     public static final ModConfigSpec.IntValue BATCH_SIZE;
     public static final ModConfigSpec.IntValue MAX_BATCH_CHARS;
     public static final ModConfigSpec.IntValue MAX_RETRIES;
@@ -66,6 +67,10 @@ public final class ClientConfig {
                 .defineInRange("maxBatchChars", 4500, 500, 30000);
         MAX_RETRIES = b.comment("Tentativas máximas com Exponential Backoff em caso de HTTP 429/503")
                 .defineInRange("maxRetries", 4, 1, 10);
+        CLAUDE_EFFORT = b.comment("Só para o Claude: quanto o modelo raciocina antes de responder (low, medium, high, "
+                        + "xhigh, max). O raciocínio é cobrado como tokens de saída: low gasta menos e costuma bastar "
+                        + "para tradução; compare na linha de Tokens da aba Início.")
+                .defineInList("claudeEffort", "medium", TranslatorConfigData.CLAUDE_EFFORT_LEVELS);
         REQUEST_TIMEOUT_SECONDS = b.comment("Timeout em segundos de cada requisição HTTP")
                 .defineInRange("requestTimeoutSeconds", 75, 15, 600);
         b.pop();
@@ -135,6 +140,7 @@ public final class ClientConfig {
         data.setBaseUrl(BASE_URL.get());
         data.setRequestsPerMinute(REQUESTS_PER_MINUTE.get());
         data.setAutoRateLimit(AUTO_RATE_LIMIT.get());
+        data.setClaudeEffort(CLAUDE_EFFORT.get());
         data.setBatchSize(BATCH_SIZE.get());
         data.setMaxBatchChars(MAX_BATCH_CHARS.get());
         data.setMaxRetries(MAX_RETRIES.get());
@@ -193,6 +199,7 @@ public final class ClientConfig {
         BASE_URL.set(data.getBaseUrl());
         REQUESTS_PER_MINUTE.set(Math.max(1, Math.min(600, data.getRequestsPerMinute())));
         AUTO_RATE_LIMIT.set(data.isAutoRateLimit());
+        CLAUDE_EFFORT.set(data.getClaudeEffort());
         BATCH_SIZE.set(data.getBatchSize());
         MAX_BATCH_CHARS.set(data.getMaxBatchChars());
         MAX_RETRIES.set(data.getMaxRetries());

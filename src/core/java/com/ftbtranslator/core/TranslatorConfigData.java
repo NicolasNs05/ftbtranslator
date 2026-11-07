@@ -18,6 +18,7 @@ public final class TranslatorConfigData {
     private String baseUrl = "";
     private int requestsPerMinute = 15;
     private boolean autoRateLimit = true;
+    private String claudeEffort = "medium";
     private int batchSize = 40;
     private int maxBatchChars = 6000;
     private int maxRetries = 4;
@@ -42,6 +43,7 @@ public final class TranslatorConfigData {
         c.baseUrl = baseUrl;
         c.requestsPerMinute = requestsPerMinute;
         c.autoRateLimit = autoRateLimit;
+        c.claudeEffort = claudeEffort;
         c.batchSize = batchSize;
         c.maxBatchChars = maxBatchChars;
         c.maxRetries = maxRetries;
@@ -179,6 +181,22 @@ public final class TranslatorConfigData {
 
     public void setBaseUrl(String baseUrl) {
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
+    }
+
+    /** Effort levels accepted by the Anthropic {@code output_config.effort} parameter. */
+    public static final List<String> CLAUDE_EFFORT_LEVELS = List.of("low", "medium", "high", "xhigh", "max");
+
+    /**
+     * Claude effort: how much the model reasons before answering. Reasoning is billed as output tokens, so
+     * {@code low} is cheaper and usually enough for translation; {@code medium} is the default.
+     */
+    public String getClaudeEffort() {
+        return claudeEffort;
+    }
+
+    public void setClaudeEffort(String effort) {
+        String e = effort == null ? "" : effort.trim().toLowerCase(Locale.ROOT);
+        this.claudeEffort = CLAUDE_EFFORT_LEVELS.contains(e) ? e : "medium";
     }
 
     /** Automatic limit: start at the provider's entry-level rate and adapt to the account. */

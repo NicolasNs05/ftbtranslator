@@ -1,7 +1,7 @@
 # Universal Modpack & Quests Auto-Translator (`ftbtranslator`) — Arquitetura e Funcionalidades
 
 > [!NOTE]
-> **Mod ID:** `ftbtranslator` | **Versão:** `0.1.0` | **Java:** `21` | **Loader Atual:** `NeoForge 1.21 / 1.21.1` (Arquitetura Multi-Loader Desacoplada pronta para Fabric, Quilt e Forge).
+> **Mod ID:** `ftbtranslator` | **Versão:** `0.2.0` (em desenvolvimento) | **Java:** `21` | **Loader Atual:** `NeoForge 1.21 / 1.21.1` (Arquitetura Multi-Loader Desacoplada pronta para Fabric, Quilt e Forge).
 
 O **Universal Modpack & Quests Auto-Translator** é um mod *Client-Side* projetado para traduzir automaticamente qualquer modpack de Minecraft (de Inglês, Japonês, Chinês, Vietnamita, Coreano, etc.) para **Português do Brasil (`pt_br`)**, cobrindo **FTB Quests**, **KubeJS / Paxi / OpenLoader**, **Mods (`.jar` e sub-mods aninhados)** e **Livros de Guia do Patchouli**, além de permitir exportar e importar todas as traduções em um pacote `.zip` compartilhável sem necessidade de API Key para quem recebe.
 
@@ -275,6 +275,11 @@ O workflow [`.github/workflows/build.yml`](.github/workflows/build.yml) compila 
 * **Implementado — Tokens:** cada cliente lê o uso informado pelo provedor ([`TokenUsage`](src/core/java/com/ftbtranslator/core/api/TokenUsage.java): `usage` da Anthropic e dos OpenAI-compatible, `usageMetadata` do Gemini, raciocínio interno contado como saída). O total aparece na aba **Início** (entrada / saída), na barra do HUD e no resumo final. Só contagem de tokens, sem conversão para moeda.
 * **Implementado — Barra no HUD:** [`TranslationHudOverlay`](src/main/java/com/ftbtranslator/neoforge/gui/TranslationHudOverlay.java) desenha o progresso no topo central da tela com as texturas da barra de chefe (roxa como a do Wither; amarela pausada; verde por 10 s ao concluir; vermelha se cancelada/erro), com tokens e textos traduzidos logo abaixo. Fica sob barras de chefe reais, some com F1 e com o painel aberto, e pode ser desligada (`showHudProgressBar`).
 * **Correção:** o Gemini passou a respeitar o limite automático (cada modelo do rodízio tem seu próprio limitador adaptativo).
+
+### 8.1.4. Falhas Rastreáveis e Reenvio (v0.2.0)
+* **Falhas no log:** cada texto rejeitado (IA não devolveu o item ou alterou/removeu marcadores de formatação) é registrado como `WARN` com o motivo (até 50 por execução; o restante é contado).
+* **Tentar falhas de novo:** depois de uma tradução com falhas, o botão de pausa da aba Início vira **"Tentar falhas"**. Como textos rejeitados não entram no cache e o *Delta Translation* passou a ignorar valores gerados idênticos ao texto original (`JarModExtractor.isUntranslatedCopy`, usado também pelo KubeJS), só as falhas voltam para a IA.
+* **Claude mais econômico:** resposta estruturada com um *schema* por lote (`{"0":"...","1":"..."}`, uma propriedade por texto) em vez de `{"translations":[{"id","text"}]}`, economizando ~10 tokens de saída por texto. O *effort* virou configurável (`claudeEffort`: `low`, `medium` padrão, `high`, `xhigh`, `max`).
 
 ### 8.2. Motor de Cache de Segunda Geração e Otimização Extrema de Tokens
 * **Implementado — Glossário Oficial:** os `pt_br.json` que os próprios mods já trazem (tradução humana) alimentam o [`TranslationGlossary`](src/core/java/com/ftbtranslator/core/cache/TranslationGlossary.java). Textos idênticos em qualquer frente são resolvidos sem IA (validando placeholders), e termos curtos encontrados no lote são injetados no prompt para manter a terminologia oficial. Arquivos `pt_br` que são só cópia do `en_us` são ignorados; divergências são resolvidas por votação.

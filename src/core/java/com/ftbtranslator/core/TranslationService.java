@@ -50,6 +50,8 @@ import java.util.function.Consumer;
 public final class TranslationService {
 
     private static final int MAX_CONSECUTIVE_BATCH_FAILURES = 5;
+    /** Rejected translations listed one by one in the log per run; the rest are only counted. */
+    static final int MAX_LOGGED_FAILURES = 50;
     /** Maximum glossary terms injected into the system prompt of a single batch. */
     static final int MAX_GLOSSARY_TERMS_PER_BATCH = 25;
 
@@ -174,6 +176,7 @@ public final class TranslationService {
         int stringsFromCache = 0;
         int stringsFromGlossary = 0;
         int stringsFailed = 0;
+        int failuresLogged = 0;
         boolean questsChanged = false;
         boolean resourcePackChanged = false;
 
@@ -420,6 +423,16 @@ public final class TranslationService {
                                 resolvedTranslations.put(origEntry.getKey(), origEntry.getKey());
                             }
                             stringsFailed++;
+                            if (failuresLogged < MAX_LOGGED_FAILURES) {
+                                failuresLogged++;
+                                String reason = rawTranslated == null
+                                        ? "a IA não devolveu este texto"
+                                        : "a IA alterou ou removeu códigos de formatação";
+                                log(callback, LogLevel.WARN, "Mantido no original (" + reason + "): \""
+                                        + abbreviate(originals.get(0).getKey()) + "\""
+                                        + (originals.size() > 1 ? " (+" + (originals.size() - 1) + " variação(ões))" : "")
+                                        + ". Clique em 'Tentar falhas de novo' para reenviar.");
+                            }
                         }
                     }
 
@@ -494,6 +507,10 @@ public final class TranslationService {
             cache.saveIfDirty();
 
             long duration = System.currentTimeMillis() - startTime;
+            if (stringsFailed > failuresLogged) {
+                log(callback, LogLevel.WARN, "Mais " + (stringsFailed - failuresLogged)
+                        + " texto(s) mantido(s) no original (não listados para não lotar o log).");
+            }
             String summary = "Tradução concluída em " + (duration / 1000.0) + "s! "
                     + tasksWritten + " arquivo(s) gravado(s), "
                     + stringsTranslated + " traduzida(s), "
@@ -755,6 +772,11 @@ public final class TranslationService {
             batches.add(current);
         }
         return batches;
+    }
+
+    private static String abbreviate(String text) {
+        String oneLine = text.replace('\n', ' ').strip();
+        return oneLine.length() > 120 ? oneLine.substring(0, 117) + "..." : oneLine;
     }
 
     private void updateProgress(TranslationCallback callback, ProgressSnapshot snapshot) {

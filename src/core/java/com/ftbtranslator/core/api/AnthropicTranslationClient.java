@@ -24,8 +24,8 @@ import java.util.Map;
  * Raw HTTP over {@link java.net.http.HttpClient} instead of the official Java SDK because the {@code core}
  * layer must stay pure Java 21 + Gson (the SDK would add OkHttp/Jackson to the mod jar).
  * <ul>
- *   <li>Structured outputs ({@code output_config.format} with a JSON schema) guarantee a parseable
- *       {@code {"translations":[{"id","text"}]}} reply, converted back to the {@code id -> text} map.</li>
+ *   <li>Structured outputs ({@code output_config.format} with a per-batch JSON schema) guarantee a parseable
+ *       {@code {"0":"...","1":"..."}} reply with exactly the batch keys.</li>
  *   <li>No sampling parameters ({@code temperature}...): API version {@value #API_VERSION} rejects them.</li>
  *   <li>Server-side refusal fallback ({@code fallbacks: "default"}) on the models that support it; a
  *       {@code refusal} or {@code max_tokens} stop is reported as an error so the service can split or skip
@@ -39,8 +39,6 @@ public final class AnthropicTranslationClient implements AiTranslationClient {
     static final String FALLBACK_BETA = "server-side-fallback-2026-07-01";
     /** Room for adaptive thinking plus the translated batch; non-streaming stays under HTTP timeouts. */
     static final long MAX_TOKENS = 16_000L;
-    /** Explicit effort (Claude Opus 5.5 defaults to medium; set it so a model swap does not change it). */
-    static final String EFFORT = "medium";
 
     private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
 
@@ -50,6 +48,7 @@ public final class AnthropicTranslationClient implements AiTranslationClient {
     private final String apiKey;
     private final HttpRetryHelper http;
     private final TokenUsage usage;
+    private final String effort;
 
     public AnthropicTranslationClient(TranslatorConfigData config, RateLimiter rateLimiter,
                                       TranslationCallback callback) {
@@ -59,6 +58,7 @@ public final class AnthropicTranslationClient implements AiTranslationClient {
     public AnthropicTranslationClient(TranslatorConfigData config, RateLimiter rateLimiter,
                                       TranslationCallback callback, TokenUsage usage) {
         this.usage = usage;
+        this.effort = config.getClaudeEffort();
         this.provider = config.getProvider();
         this.baseUrl = config.effectiveBaseUrl();
         this.model = config.effectiveModel();
@@ -76,12 +76,7 @@ public final class AnthropicTranslationClient implements AiTranslationClient {
             throw new IOException("API Key para " + provider.displayName() + " não foi informada.");
         }
 
-        JsonObject payloadJson = new JsonObject();
-        for (Map.Entry<String, String> entry : batch.entrySet()) {
-            payloadJson.addProperty(entry.getKey(), entry.getValue());
-        }
-
-        JsonObject root = buildRequest(systemPrompt, GSON.toJson(payloadJson));
+        JsonObject root = buildRequest(systemPrompt, batch);
 
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("x-api-key", apiKey);
@@ -104,13 +99,17 @@ public final class AnthropicTranslationClient implements AiTranslationClient {
         return parseTranslations(responseBody);
     }
 
-    JsonObject buildRequest(String systemPrompt, String userJson) {
+    JsonObject buildRequest(String systemPrompt, Map<String, String> batch) {
+        JsonObject payloadJson = new JsonObject();
+        for (Map.Entry<String, String> entry : batch.entrySet()) {
+            payloadJson.addProperty(entry.getKey(), entry.getValue());
+        }
+        String userJson = GSON.toJson(payloadJson);
+
         JsonObject root = new JsonObject();
         root.addProperty("model", model);
         root.addProperty("max_tokens", MAX_TOKENS);
-        root.addProperty("system", systemPrompt
-                + "\nFormato da resposta: {\"translations\":[{\"id\":\"0\",\"text\":\"...\"}]}, "
-                + "um item por chave recebida, com o id igual à chave.");
+        root.addProperty("system", systemPrompt);
 
         JsonArray messages = new JsonArray();
         JsonObject userMsg = new JsonObject();
@@ -121,11 +120,11 @@ public final class AnthropicTranslationClient implements AiTranslationClient {
 
         JsonObject outputConfig = new JsonObject();
         if (supportsEffort(model)) {
-            outputConfig.addProperty("effort", EFFORT);
+            outputConfig.addProperty("effort", effort);
         }
         JsonObject format = new JsonObject();
         format.addProperty("type", "json_schema");
-        format.add("schema", translationsSchema());
+        format.add("schema", batchSchema(batch.keySet()));
         outputConfig.add("format", format);
         root.add("output_config", outputConfig);
 
@@ -135,31 +134,22 @@ public final class AnthropicTranslationClient implements AiTranslationClient {
         return root;
     }
 
-    /** {@code {"translations":[{"id":string,"text":string}]}} with {@code additionalProperties:false}. */
-    static JsonObject translationsSchema() {
-        JsonObject item = new JsonObject();
-        item.addProperty("type", "object");
-        JsonObject itemProps = new JsonObject();
-        itemProps.add("id", typeOnly("string"));
-        itemProps.add("text", typeOnly("string"));
-        item.add("properties", itemProps);
-        JsonArray itemRequired = new JsonArray();
-        itemRequired.add("id");
-        itemRequired.add("text");
-        item.add("required", itemRequired);
-        item.addProperty("additionalProperties", false);
-
-        JsonObject list = new JsonObject();
-        list.addProperty("type", "array");
-        list.add("items", item);
-
+    /**
+     * Schema of one batch: an object with exactly the batch keys ({@code "0"}, {@code "1"}...), each a string,
+     * all required, {@code additionalProperties:false}. The reply is the same compact {@code {"0":"..."}}
+     * shape the other providers use: ~10 fewer output tokens per text than an id/text array, which matters
+     * for short item names. One schema per batch size, compiled once and cached by the API for 24 h.
+     */
+    static JsonObject batchSchema(Iterable<String> keys) {
+        JsonObject props = new JsonObject();
+        JsonArray required = new JsonArray();
+        for (String key : keys) {
+            props.add(key, typeOnly("string"));
+            required.add(key);
+        }
         JsonObject schema = new JsonObject();
         schema.addProperty("type", "object");
-        JsonObject props = new JsonObject();
-        props.add("translations", list);
         schema.add("properties", props);
-        JsonArray required = new JsonArray();
-        required.add("translations");
         schema.add("required", required);
         schema.addProperty("additionalProperties", false);
         return schema;
@@ -172,8 +162,8 @@ public final class AnthropicTranslationClient implements AiTranslationClient {
     }
 
     /**
-     * Reads the text blocks of a Messages API response (thinking / fallback blocks are skipped) and converts
-     * the structured {@code translations} array into an {@code id -> text} map.
+     * Reads the text blocks of a Messages API response (thinking / fallback blocks are skipped) and parses the
+     * structured {@code {"0":"...","1":"..."}} object into an {@code id -> text} map.
      */
     static Map<String, String> parseTranslations(String responseBody) throws IOException {
         JsonObject root;
@@ -214,18 +204,7 @@ public final class AnthropicTranslationClient implements AiTranslationClient {
             throw new IOException("Resposta da Anthropic sem texto (stop_reason: " + stopReason + ").");
         }
 
-        try {
-            JsonObject parsed = JsonParser.parseString(text.toString()).getAsJsonObject();
-            JsonArray items = parsed.getAsJsonArray("translations");
-            Map<String, String> out = new LinkedHashMap<>();
-            for (JsonElement el : items) {
-                JsonObject item = el.getAsJsonObject();
-                out.put(item.get("id").getAsString(), item.get("text").getAsString());
-            }
-            return out;
-        } catch (RuntimeException e) {
-            throw new IOException("JSON inválido retornado pelo Claude: " + e.getMessage(), e);
-        }
+        return HttpRetryHelper.parseJsonStringMap(text.toString());
     }
 
     /** Server-side refusal fallback is offered on the Opus 5 / Fable 5 families and Sonnet 5.5 (not Haiku). */

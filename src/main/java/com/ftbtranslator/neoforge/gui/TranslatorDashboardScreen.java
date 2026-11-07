@@ -212,11 +212,22 @@ public final class TranslatorDashboardScreen extends Screen {
         startBtn.setTooltip(tip("Traduz tudo o que estiver marcado na aba Conteúdo. Pode fechar esta tela: "
                 + "a tradução continua em segundo plano e o progresso fica salvo no cache."));
 
+        // Same slot, two jobs: pause/resume while running; after a run with failures, retry only those.
         pauseResumeBtn = this.addRenderableWidget(Button.builder(
                         Component.literal("⏸ Pausar"),
-                        b -> triggerTogglePause())
+                        b -> {
+                            if (FtbTranslatorMod.service().isRunning()) {
+                                triggerTogglePause();
+                            } else {
+                                triggerRetryFailures();
+                            }
+                        })
                 .bounds(left + 111, rowY, 96, 20)
                 .build());
+        pauseResumeBtn.setTooltip(tip("Durante a tradução: pausa e retoma. Depois de uma tradução com falhas "
+                + "(textos que ficaram em inglês porque a resposta da IA veio estragada): vira 'Tentar falhas' "
+                + "e reenvia só esses textos; todo o resto vem do cache, sem gastar IA. A lista das falhas fica "
+                + "no log do jogo (logs/latest.log)."));
 
         cancelBtn = this.addRenderableWidget(Button.builder(
                         Component.literal("■ Cancelar Agora"),
@@ -227,7 +238,7 @@ public final class TranslatorDashboardScreen extends Screen {
                 + "e a próxima execução continua de onde parou."));
 
         applyReloadBtn = this.addRenderableWidget(Button.builder(
-                        Component.literal("↻ Aplicar e Recarregar"),
+                        Component.literal("↻ Aplicar"),
                         b -> {
                             if (isBusy()) {
                                 return;
@@ -697,6 +708,21 @@ public final class TranslatorDashboardScreen extends Screen {
         refreshButtonStates();
     }
 
+    /**
+     * Starts a normal run: rejected texts were not cached and Delta Translation no longer treats them as
+     * translated, so only they reach the AI while everything else resolves from the cache.
+     */
+    private void triggerRetryFailures() {
+        if (isBusy()) {
+            return;
+        }
+        int failures = FtbTranslatorMod.service().latestSnapshot().stringsFailed();
+        triggerStartTranslation();
+        if (workingConfig.validateForTranslation() == null) {
+            setBanner("Reenviando " + failures + " texto(s) que falharam; o resto vem do cache.", 0xFF55FFFF);
+        }
+    }
+
     private void triggerTogglePause() {
         var service = FtbTranslatorMod.service();
         if (!service.isRunning() || cancelRequested) {
@@ -803,8 +829,11 @@ public final class TranslatorDashboardScreen extends Screen {
             startBtn.setMessage(Component.literal(canEditConfig ? "§a▶ Iniciar Tradução" : "▶ Iniciar Tradução"));
         }
         if (pauseResumeBtn != null) {
-            pauseResumeBtn.active = running && !cancelRequested;
-            if (!running) {
+            int pendingFailures = running ? 0 : FtbTranslatorMod.service().latestSnapshot().stringsFailed();
+            pauseResumeBtn.active = running ? !cancelRequested : pendingFailures > 0 && canEditConfig;
+            if (!running && pendingFailures > 0) {
+                pauseResumeBtn.setMessage(Component.literal(canEditConfig ? "§e↻ Tentar falhas" : "↻ Tentar falhas"));
+            } else if (!running) {
                 pauseResumeBtn.setMessage(Component.literal("⏸ Pausar"));
             } else if (paused) {
                 pauseResumeBtn.setMessage(Component.literal("§a▶ Retomar Tradução"));
@@ -820,7 +849,7 @@ public final class TranslatorDashboardScreen extends Screen {
         if (applyReloadBtn != null) {
             applyReloadBtn.active = canEditConfig;
             applyReloadBtn.setMessage(Component.literal(
-                    canEditConfig ? "§b↻ Aplicar e Recarregar" : "↻ Aplicar e Recarregar"));
+                    canEditConfig ? "§b↻ Aplicar" : "↻ Aplicar"));
         }
         if (exportZipBtn != null) {
             exportZipBtn.active = canEditConfig;

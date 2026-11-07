@@ -1148,6 +1148,347 @@ class EndToEndCoreTest {
         }
     }
 
+    @Test
+    void resilientBatchSplittingRecoversFromTruncatedJsonWithoutShufflingKeys(@TempDir Path tempRoot) throws Exception {
+        Path instance = tempRoot.resolve("instance");
+        Path kubeLangDir = instance.resolve("kubejs/assets/kubejs/lang");
+        Files.createDirectories(kubeLangDir);
+        JsonObject sourceJson = new JsonObject();
+        for (int i = 1; i <= 12; i++) {
+            sourceJson.addProperty(String.format("item.kubejs.k%02d", i), String.format("Unique Item Alpha %02d", i));
+        }
+        Files.writeString(kubeLangDir.resolve("en_us.json"), sourceJson.toString(), StandardCharsets.UTF_8);
+
+        List<Integer> batchSizesReceived = Collections.synchronizedList(new ArrayList<>());
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            JsonObject req = JsonParser.parseString(new String(
+                    exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject();
+            JsonObject input = JsonParser.parseString(req.getAsJsonArray("messages").get(1).getAsJsonObject()
+                    .get("content").getAsString()).getAsJsonObject();
+            batchSizesReceived.add(input.size());
+
+            String assistantContent;
+            if (input.size() >= 10) {
+                // Simulate truncated JSON response on the full 12-item batch so translateBatchResilient splits it
+                assistantContent = "{\"0\":\"[PT-BR] Unique Item";
+            } else {
+                JsonObject out = new JsonObject();
+                for (Map.Entry<String, JsonElement> e : input.entrySet()) {
+                    out.addProperty(e.getKey(), "[PT-BR] " + e.getValue().getAsString());
+                }
+                assistantContent = out.toString();
+            }
+
+            JsonObject msg = new JsonObject();
+            msg.addProperty("content", assistantContent);
+            JsonObject choice = new JsonObject();
+            choice.add("message", msg);
+            com.google.gson.JsonArray choices = new com.google.gson.JsonArray();
+            choices.add(choice);
+            JsonObject resp = new JsonObject();
+            resp.add("choices", choices);
+            byte[] bytes = resp.toString().getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            TranslatorConfigData cfg = mockConfig(server);
+            cfg.setMaxRetries(1);
+            TranslationService service = new TranslationService(instance);
+            TranslationReport report = service.runSynchronously(cfg, EnumSet.of(TranslationScope.KUBEJS), null);
+
+            assertTrue(report.success(), report.message());
+            assertEquals(12, report.stringsTranslated());
+            assertEquals(0, report.stringsFailed());
+            // First attempt had 12 items, then split into two sub-batches of 6 + 6 items.
+            assertEquals(List.of(12, 6, 6), batchSizesReceived);
+
+            JsonObject written = JsonParser.parseString(
+                    Files.readString(kubeLangDir.resolve("pt_br.json"), StandardCharsets.UTF_8)).getAsJsonObject();
+            for (int i = 1; i <= 12; i++) {
+                String key = String.format("item.kubejs.k%02d", i);
+                String expected = String.format("[PT-BR] Unique Item Alpha %02d", i);
+                assertEquals(expected, written.get(key).getAsString(), "Mismatch at key " + key);
+            }
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void cancellationAndPauseMidRunSaveCompletedBatchesToCacheAndDisk(@TempDir Path tempRoot) throws Exception {
+        Path instance = tempRoot.resolve("instance");
+        Path kubeLangDir = instance.resolve("kubejs/assets/kubejs/lang");
+        Files.createDirectories(kubeLangDir);
+        String text1 = "First long translatable sentence that exceeds one hundred characters so each item forms its own batch Alpha Beta Gamma";
+        String text2 = "Second long translatable sentence that exceeds one hundred characters so each item forms its own batch Delta Epsilon Zeta";
+        String text3 = "Third long translatable sentence that exceeds one hundred characters so each item forms its own batch Eta Theta Iota Kappa";
+        JsonObject sourceJson = new JsonObject();
+        sourceJson.addProperty("item.kubejs.first", text1);
+        sourceJson.addProperty("item.kubejs.second", text2);
+        sourceJson.addProperty("item.kubejs.third", text3);
+        Files.writeString(kubeLangDir.resolve("en_us.json"), sourceJson.toString(), StandardCharsets.UTF_8);
+
+        CountDownLatch batch2Arrived = new CountDownLatch(1);
+        CountDownLatch releaseBatch2 = new CountDownLatch(1);
+        int[] callCount = {0};
+
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            callCount[0]++;
+            JsonObject req = JsonParser.parseString(new String(
+                    exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject();
+            JsonObject input = JsonParser.parseString(req.getAsJsonArray("messages").get(1).getAsJsonObject()
+                    .get("content").getAsString()).getAsJsonObject();
+            if (callCount[0] == 2) {
+                batch2Arrived.countDown();
+                try {
+                    releaseBatch2.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            JsonObject out = new JsonObject();
+            for (Map.Entry<String, JsonElement> e : input.entrySet()) {
+                out.addProperty(e.getKey(), "[PT-BR] " + e.getValue().getAsString());
+            }
+            JsonObject msg = new JsonObject();
+            msg.addProperty("content", out.toString());
+            JsonObject choice = new JsonObject();
+            choice.add("message", msg);
+            com.google.gson.JsonArray choices = new com.google.gson.JsonArray();
+            choices.add(choice);
+            JsonObject resp = new JsonObject();
+            resp.add("choices", choices);
+            byte[] bytes = resp.toString().getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            TranslatorConfigData cfg = mockConfig(server);
+            cfg.setMaxBatchChars(200);
+            TranslationService service = new TranslationService(instance);
+            CompletableFuture<TranslationReport> future = service.startAsync(
+                    cfg, EnumSet.of(TranslationScope.KUBEJS), null);
+
+            assertTrue(batch2Arrived.await(10, TimeUnit.SECONDS), "second batch never started");
+
+            // Pause flushes the in-memory cache of batch 1 immediately to disk
+            assertTrue(service.togglePause(null));
+            assertTrue(service.isPaused());
+            assertTrue(Files.isRegularFile(service.paths().cacheFile("pt_br")),
+                    "pausing must flush completed batch 1 to cache_pt_br.json");
+
+            // Cancel while on batch 2
+            assertTrue(service.cancel());
+            releaseBatch2.countDown();
+
+            TranslationReport report = future.get(10, TimeUnit.SECONDS);
+            assertTrue(report.cancelled());
+            assertFalse(report.success());
+            assertTrue(report.stringsTranslated() >= 1);
+
+            // Batch 1 is persisted in cache and written to the output file
+            TranslationCache savedCache = new TranslationCache(service.paths().cacheFile("pt_br"));
+            savedCache.load();
+            assertEquals("[PT-BR] " + text1, savedCache.resolve(text1, new TokenMasker()));
+
+            JsonObject partialOut = JsonParser.parseString(
+                    Files.readString(kubeLangDir.resolve("pt_br.json"), StandardCharsets.UTF_8)).getAsJsonObject();
+            assertEquals("[PT-BR] " + text1, partialOut.get("item.kubejs.first").getAsString());
+            assertEquals(text3, partialOut.get("item.kubejs.third").getAsString(),
+                    "batch 3 was never sent because the run was cancelled on batch 2");
+        } finally {
+            releaseBatch2.countDown();
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void geminiClientPuts404ModelsOnLongCooldownAndRoundRobinsHealthyPool() throws Exception {
+        Map<String, Integer> callsPerModel = new java.util.concurrent.ConcurrentHashMap<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1beta/models/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            String model = path.substring("/v1beta/models/".length(), path.indexOf(":generateContent"));
+            callsPerModel.merge(model, 1, Integer::sum);
+
+            // Simulate gemini-2.5-flash and gemini-2.5-flash-lite returning HTTP 404 (unavailable to new accounts)
+            if (model.startsWith("gemini-2.5-")) {
+                byte[] err404 = ("{\"error\":{\"code\":404,\"message\":\"This model models/" + model
+                        + " is no longer available to new users.\"}}").getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(404, err404.length);
+                exchange.getResponseBody().write(err404);
+                exchange.close();
+                return;
+            }
+            byte[] ok = """
+                    {
+                      "candidates": [
+                        {
+                          "content": {
+                            "parts": [
+                              { "text": "{\\"0\\": \\"Sucesso\\"}" }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, ok.length);
+            exchange.getResponseBody().write(ok);
+            exchange.close();
+        });
+        server.start();
+        try {
+            TranslatorConfigData cfg = new TranslatorConfigData();
+            cfg.setProvider(ProviderType.GEMINI);
+            cfg.setApiKey("test-key");
+            cfg.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1beta");
+            cfg.setMaxRetries(1);
+            cfg.setRequestsPerMinute(600);
+            cfg.setAutoRateLimit(false);
+
+            GeminiTranslationClient client = new GeminiTranslationClient(cfg, new RateLimiter(600), null);
+            for (int i = 0; i < 6; i++) {
+                Map<String, String> res = client.translateBatch(
+                        Map.of("0", "Test " + i), "Translate", new CancellationToken());
+                assertEquals("Sucesso", res.get("0"));
+            }
+
+            // Models returning HTTP 404 are placed on a 1-hour cooldown on first encounter and never retried.
+            assertTrue(callsPerModel.getOrDefault("gemini-2.5-flash", 0) <= 1, callsPerModel.toString());
+            assertTrue(callsPerModel.getOrDefault("gemini-2.5-flash-lite", 0) <= 1, callsPerModel.toString());
+            // Healthy 3.x models in the fast pool handled all 6 batches across the round-robin rotation.
+            int healthyCalls = callsPerModel.getOrDefault("gemini-3.1-flash-lite", 0)
+                    + callsPerModel.getOrDefault("gemini-3.5-flash-lite", 0)
+                    + callsPerModel.getOrDefault("gemini-3.5-flash", 0);
+            assertEquals(6, healthyCalls, callsPerModel.toString());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void adaptiveBatchBuilderPacksUpTo80ShortStringsAndCapsHeavyBookPagesAt25(@TempDir Path tempRoot) throws Exception {
+        Path instance = tempRoot.resolve("instance");
+        Path kubeLangDir = instance.resolve("kubejs/assets/kubejs/lang");
+        Files.createDirectories(kubeLangDir);
+        JsonObject shortItems = new JsonObject();
+        for (int i = 1; i <= 90; i++) {
+            shortItems.addProperty("item.kubejs.short_" + i, "Sword " + i);
+        }
+        Files.writeString(kubeLangDir.resolve("en_us.json"), shortItems.toString(), StandardCharsets.UTF_8);
+
+        Path bookEntriesDir = instance.resolve("patchouli_books/guide/en_us/entries");
+        Files.createDirectories(bookEntriesDir);
+        JsonObject bookEntry = new JsonObject();
+        bookEntry.addProperty("name", " Encyclopedia");
+        com.google.gson.JsonArray pages = new com.google.gson.JsonArray();
+        for (int i = 1; i <= 30; i++) {
+            JsonObject page = new JsonObject();
+            page.addProperty("type", "patchouli:text");
+            page.addProperty("text", "Page number " + i + " — " + "lore text about magicules and skills ".repeat(10));
+            pages.add(page);
+        }
+        bookEntry.add("pages", pages);
+        Files.writeString(bookEntriesDir.resolve("lore.json"), bookEntry.toString(), StandardCharsets.UTF_8);
+
+        List<Integer> batchSizes = Collections.synchronizedList(new ArrayList<>());
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            JsonObject req = JsonParser.parseString(new String(
+                    exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject();
+            JsonObject input = JsonParser.parseString(req.getAsJsonArray("messages").get(1).getAsJsonObject()
+                    .get("content").getAsString()).getAsJsonObject();
+            batchSizes.add(input.size());
+            JsonObject out = new JsonObject();
+            for (Map.Entry<String, JsonElement> e : input.entrySet()) {
+                out.addProperty(e.getKey(), "[PT-BR] " + e.getValue().getAsString());
+            }
+            JsonObject msg = new JsonObject();
+            msg.addProperty("content", out.toString());
+            JsonObject choice = new JsonObject();
+            choice.add("message", msg);
+            com.google.gson.JsonArray choices = new com.google.gson.JsonArray();
+            choices.add(choice);
+            JsonObject resp = new JsonObject();
+            resp.add("choices", choices);
+            byte[] bytes = resp.toString().getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            TranslatorConfigData cfg = mockConfig(server);
+            TranslationService service = new TranslationService(instance);
+
+            // 90 short strings are packed into 80 + 10 (2 batches instead of 3).
+            assertTrue(service.runSynchronously(cfg, EnumSet.of(TranslationScope.KUBEJS), null).success());
+            assertEquals(List.of(80, 10), batchSizes);
+
+            // Long Patchouli pages (> 300 chars) never exceed 25 items per batch.
+            batchSizes.clear();
+            assertTrue(service.runSynchronously(cfg, EnumSet.of(TranslationScope.PATCHOULI), null).success());
+            assertFalse(batchSizes.isEmpty());
+            assertTrue(batchSizes.stream().allMatch(size -> size <= 25), batchSizes.toString());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void bundleImportBlocksZipSlipTraversalAndResetRestoresRootPatchouliBackup(@TempDir Path tempRoot) throws Exception {
+        Path instance = tempRoot.resolve("instance");
+        Files.createDirectories(instance.resolve("exports"));
+        Path zipPath = instance.resolve("exports").resolve(TranslationBundleManager.DEFAULT_BUNDLE_FILENAME);
+
+        try (OutputStream fos = Files.newOutputStream(zipPath);
+             ZipOutputStream zos = new ZipOutputStream(fos)) {
+            writeZipText(zos, "../../evil_outside.txt", "pwned");
+            writeZipText(zos, "config/ftbtranslator-client.toml", "apiKey = 'stolen'");
+            writeZipText(zos, "mods/malware.jar", "bad");
+            writeZipText(zos, "kubejs/assets/kubejs/lang/pt_br.json", "{\"item.kubejs.safe\":\"Seguro\"}");
+            writeZipText(zos, "patchouli_books/lexicon/pt_br/entries/intro.json", "{\"name\":\"Intro PT\"}");
+        }
+
+        // Seed a root Patchouli book backup to verify resetAll restores it
+        Path rootBookJson = instance.resolve("patchouli_books/lexicon/book.json");
+        Path backupBookJson = instance.resolve("patchouli_books_backup_original/lexicon/book.json");
+        Files.createDirectories(rootBookJson.getParent());
+        Files.createDirectories(backupBookJson.getParent());
+        Files.writeString(rootBookJson, "{\"name\":\"Translated Book\"}", StandardCharsets.UTF_8);
+        Files.writeString(backupBookJson, "{\"name\":\"Original Book\"}", StandardCharsets.UTF_8);
+
+        TranslationService service = new TranslationService(instance);
+        TranslationBundleManager.ImportResult imported = service.importBundle("pt_br");
+
+        // Only the 2 allowed translation files were extracted; all 3 disallowed/traversal entries were blocked.
+        assertEquals(2, imported.filesExtracted());
+        assertFalse(Files.exists(tempRoot.resolve("evil_outside.txt")));
+        assertFalse(Files.exists(instance.resolve("config/ftbtranslator-client.toml")));
+        assertFalse(Files.exists(instance.resolve("mods/malware.jar")));
+        assertTrue(Files.isRegularFile(instance.resolve("kubejs/assets/kubejs/lang/pt_br.json")));
+        assertTrue(Files.isRegularFile(instance.resolve("patchouli_books/lexicon/pt_br/entries/intro.json")));
+
+        // Reset removes both extracted translation files and restores root patchouli_books/lexicon/book.json from backup
+        TranslationBundleManager.ResetResult reset = service.resetAll("pt_br");
+        assertEquals(2, reset.filesRemoved());
+        assertEquals(1, reset.backupsRestored());
+        assertFalse(Files.exists(instance.resolve("kubejs/assets/kubejs/lang/pt_br.json")));
+        assertFalse(Files.exists(instance.resolve("patchouli_books/lexicon/pt_br")));
+        assertFalse(Files.exists(instance.resolve("patchouli_books_backup_original")));
+        assertEquals("{\"name\":\"Original Book\"}", Files.readString(rootBookJson, StandardCharsets.UTF_8));
+    }
+
     private static TranslatorConfigData mockConfig(HttpServer server) {
         TranslatorConfigData cfg = new TranslatorConfigData();
         cfg.setProvider(ProviderType.OLLAMA);

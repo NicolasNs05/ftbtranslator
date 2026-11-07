@@ -1,6 +1,8 @@
 package com.ftbtranslator.core;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -10,7 +12,12 @@ import java.util.Objects;
  */
 public final class TranslatorConfigData {
 
-    public static final List<String> DEFAULT_SOURCE_LANGUAGES = List.of("en_us", "ja_jp", "zh_cn", "zh_tw", "ko_kr");
+    /**
+     * Unmodifiable list backed by {@link Arrays#asList} so {@code contains(null)} returns {@code false}
+     * instead of throwing {@link NullPointerException} when probed by NightConfig/ModConfigSpec.
+     */
+    public static final List<String> DEFAULT_SOURCE_LANGUAGES =
+            Collections.unmodifiableList(Arrays.asList("en_us", "ja_jp", "zh_cn", "zh_tw", "ko_kr"));
 
     private ProviderType provider = ProviderType.GEMINI;
     private String apiKey = "";
@@ -183,8 +190,13 @@ public final class TranslatorConfigData {
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
     }
 
-    /** Effort levels accepted by the Anthropic {@code output_config.effort} parameter. */
-    public static final List<String> CLAUDE_EFFORT_LEVELS = List.of("low", "medium", "high", "xhigh", "max");
+    /**
+     * Effort levels accepted by the Anthropic {@code output_config.effort} parameter.
+     * Uses {@link Arrays#asList} so {@code contains(null)} returns {@code false} instead of throwing
+     * {@link NullPointerException} when NightConfig/ModConfigSpec validates missing keys.
+     */
+    public static final List<String> CLAUDE_EFFORT_LEVELS =
+            Collections.unmodifiableList(Arrays.asList("low", "medium", "high", "xhigh", "max"));
 
     /**
      * Claude effort: how much the model reasons before answering. Reasoning is billed as output tokens, so
@@ -336,7 +348,7 @@ public final class TranslatorConfigData {
     }
 
     public List<String> getSourceLanguages() {
-        return List.copyOf(sourceLanguages);
+        return Collections.unmodifiableList(new ArrayList<>(sourceLanguages));
     }
 
     public void setSourceLanguages(List<String> sourceLanguages) {

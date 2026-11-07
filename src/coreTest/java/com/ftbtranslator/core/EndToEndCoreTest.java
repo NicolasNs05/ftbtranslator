@@ -926,6 +926,8 @@ class EndToEndCoreTest {
             assertEquals("low", requests.get(0).getAsJsonObject("output_config").get("effort").getAsString());
             cfg.setClaudeEffort("ultra");
             assertEquals("medium", cfg.getClaudeEffort(), "unknown effort falls back to medium");
+            assertFalse(TranslatorConfigData.CLAUDE_EFFORT_LEVELS.contains(null));
+            assertFalse(TranslatorConfigData.DEFAULT_SOURCE_LANGUAGES.contains(null));
         } finally {
             server.stop(0);
         }

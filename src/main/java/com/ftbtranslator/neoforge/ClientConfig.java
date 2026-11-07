@@ -70,7 +70,8 @@ public final class ClientConfig {
         CLAUDE_EFFORT = b.comment("Só para o Claude: quanto o modelo raciocina antes de responder (low, medium, high, "
                         + "xhigh, max). O raciocínio é cobrado como tokens de saída: low gasta menos e costuma bastar "
                         + "para tradução; compare na linha de Tokens da aba Início.")
-                .defineInList("claudeEffort", "medium", TranslatorConfigData.CLAUDE_EFFORT_LEVELS);
+                .define("claudeEffort", "medium",
+                        o -> o instanceof String s && TranslatorConfigData.CLAUDE_EFFORT_LEVELS.contains(s));
         REQUEST_TIMEOUT_SECONDS = b.comment("Timeout em segundos de cada requisição HTTP")
                 .defineInRange("requestTimeoutSeconds", 75, 15, 600);
         b.pop();

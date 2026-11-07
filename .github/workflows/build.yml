@@ -3,6 +3,7 @@ name: Build
 # Compila o mod e roda os testes do core a cada push e pull request, deixando o .jar
 # para baixar na aba Actions. Ao enviar uma tag de versão (ex.: v1.0.1), também cria
 # uma Release no GitHub com o .jar anexado, já com essa versão no nome do arquivo.
+# Regras de versionamento: AGENTS.md (seção 1).
 on:
   push:
     branches: ["**"]
@@ -84,3 +85,5 @@ jobs:
         with:
           files: dist/*.jar
           generate_release_notes: true
+          # Versões em desenvolvimento (v0.x) e de teste (-beta.N, -rc.N) saem como Pre-release.
+          prerelease: ${{ startsWith(github.ref_name, 'v0.') || contains(github.ref_name, '-') }}

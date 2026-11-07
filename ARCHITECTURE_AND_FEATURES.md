@@ -1,7 +1,7 @@
 # Universal Modpack & Quests Auto-Translator (`ftbtranslator`) — Arquitetura e Funcionalidades
 
 > [!NOTE]
-> **Mod ID:** `ftbtranslator` | **Versão:** `1.0.0` | **Java:** `21` | **Loader Atual:** `NeoForge 1.21 / 1.21.1` (Arquitetura Multi-Loader Desacoplada pronta para Fabric, Quilt e Forge).
+> **Mod ID:** `ftbtranslator` | **Versão:** `0.1.0` | **Java:** `21` | **Loader Atual:** `NeoForge 1.21 / 1.21.1` (Arquitetura Multi-Loader Desacoplada pronta para Fabric, Quilt e Forge).
 
 O **Universal Modpack & Quests Auto-Translator** é um mod *Client-Side* projetado para traduzir automaticamente qualquer modpack de Minecraft (de Inglês, Japonês, Chinês, Vietnamita, Coreano, etc.) para **Português do Brasil (`pt_br`)**, cobrindo **FTB Quests**, **KubeJS / Paxi / OpenLoader**, **Mods (`.jar` e sub-mods aninhados)** e **Livros de Guia do Patchouli**, além de permitir exportar e importar todas as traduções em um pacote `.zip` compartilhável sem necessidade de API Key para quem recebe.
 
@@ -251,6 +251,7 @@ O workflow [`.github/workflows/build.yml`](.github/workflows/build.yml) compila 
 * **Download do `.jar`:** aba **Actions** do repositório → execução desejada → seção **Artifacts** (`ftbtranslator-<versão>-build.<n>-<commit>`; o `.jar` fica disponível por 30 dias).
 * **Release:** ao enviar uma tag de versão (`git tag v1.0.1` + `git push origin v1.0.1`), o workflow compila com essa versão (`-Pmod_version=1.0.1`) e cria uma **Release** no GitHub com o `.jar` anexado e notas geradas automaticamente.
 * Se os testes falharem, o relatório (`build/reports/tests/`) é publicado como artefato para análise.
+* **Versionamento:** Versionamento Semântico; série `0.x` até o lançamento público (`1.0.0`). Tags `v0.*` e com sufixo (`-beta.N`, `-rc.N`) viram *Pre-release*. Regras completas em [`AGENTS.md`](AGENTS.md).
 
 ## 8. Roadmap de Evolução Futura (Próximas Etapas Planejadas)
 

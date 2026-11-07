@@ -24,7 +24,8 @@ import java.util.zip.ZipOutputStream;
 
 /**
  * Exports all generated translations into {@code exports/Traducao_Modpack_PTBR.zip} so a player can share
- * the translation with friends (who can import it with a single click without needing an API Key).
+ * the translation with friends (who can import it with a single click without needing an API Key), and
+ * provides a full reset routine to wipe the cache and generated translations.
  */
 public final class TranslationBundleManager {
 
@@ -35,6 +36,10 @@ public final class TranslationBundleManager {
 
     public record ImportResult(Path zipPath, int filesExtracted, int cacheEntriesMerged,
                                boolean questsTouched, boolean resourcePackTouched) {
+    }
+
+    public record ResetResult(int filesRemoved, int backupsRestored,
+                              boolean questsTouched, boolean resourcePackTouched) {
     }
 
     private TranslationBundleManager() {
@@ -228,6 +233,149 @@ public final class TranslationBundleManager {
             ResourcePackGenerator.ensurePackMcmeta(paths);
         }
         return new ImportResult(zipPath, extracted, cacheMerged, questsTouched, resourcePackTouched);
+    }
+
+    /**
+     * Deletes the translation cache and all generated translation files for {@code targetLanguage},
+     * restoring any backed-up original files (hardcoded FTB Quests chapters/reward_tables and root
+     * Patchouli books).
+     */
+    public static ResetResult resetTranslations(GamePaths paths, String targetLanguage) throws IOException {
+        String target = (targetLanguage == null || targetLanguage.isBlank())
+                ? "pt_br"
+                : targetLanguage.trim().toLowerCase(Locale.ROOT);
+
+        int filesRemoved = 0;
+        int backupsRestored = 0;
+        boolean questsTouched = false;
+        boolean resourcePackTouched = false;
+
+        // 1. Delete SHA-256 translation cache and any temporary files in config/ftbtranslator/
+        Path cacheFile = paths.cacheFile(target);
+        if (Files.deleteIfExists(cacheFile)) {
+            filesRemoved++;
+        }
+        if (Files.isDirectory(paths.translatorConfigDir())) {
+            try (Stream<Path> s = Files.list(paths.translatorConfigDir())) {
+                for (Path p : s.filter(Files::isRegularFile).toList()) {
+                    String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
+                    if (name.endsWith(".tmp") || name.startsWith("cache_")) {
+                        if (Files.deleteIfExists(p)) {
+                            filesRemoved++;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Delete generated resource pack (resourcepacks/AutoTranslated_Pack_PTBR)
+        if (Files.exists(paths.generatedPackDir())) {
+            filesRemoved += deleteTreeCountingRegularFiles(paths.generatedPackDir());
+            resourcePackTouched = true;
+        }
+
+        // 3. Delete FTB Quests lang/<target>.snbt and lang/<target>/, and restore hardcoded quest backups
+        Path questsLangDir = paths.questsDir().resolve("lang");
+        Path questsLangFile = questsLangDir.resolve(target + ".snbt");
+        if (Files.deleteIfExists(questsLangFile)) {
+            filesRemoved++;
+            questsTouched = true;
+        }
+        Path questsLangSub = questsLangDir.resolve(target);
+        if (Files.exists(questsLangSub)) {
+            filesRemoved += deleteTreeCountingRegularFiles(questsLangSub);
+            questsTouched = true;
+        }
+
+        Path questsBackupRoot = paths.questsBackupDir();
+        if (Files.isDirectory(questsBackupRoot)) {
+            try (Stream<Path> walk = Files.walk(questsBackupRoot)) {
+                for (Path backupFile : walk.filter(Files::isRegularFile).toList()) {
+                    Path rel = questsBackupRoot.relativize(backupFile);
+                    Path dest = paths.questsDir().resolve(rel);
+                    if (dest.getParent() != null) {
+                        Files.createDirectories(dest.getParent());
+                    }
+                    Files.copy(backupFile, dest, StandardCopyOption.REPLACE_EXISTING);
+                    backupsRestored++;
+                    questsTouched = true;
+                }
+            }
+            deleteTreeCountingRegularFiles(questsBackupRoot);
+        }
+
+        // 4. Delete generated KubeJS / Paxi / OpenLoader lang/<target>.json files
+        List<Path> kubeRoots = List.of(
+                paths.kubejsDir().resolve("assets"),
+                paths.configDir().resolve("paxi").resolve("resourcepacks"),
+                paths.configDir().resolve("openloader").resolve("resources"),
+                paths.gameDir().resolve("openloader").resolve("resources"));
+        String targetJsonName = target + ".json";
+        for (Path root : kubeRoots) {
+            if (!Files.isDirectory(root)) {
+                continue;
+            }
+            try (Stream<Path> walk = Files.walk(root, 6)) {
+                for (Path p : walk.filter(Files::isRegularFile)
+                        .filter(p -> p.getFileName().toString().equalsIgnoreCase(targetJsonName))
+                        .filter(p -> p.getParent() != null
+                                && p.getParent().getFileName().toString().equalsIgnoreCase("lang"))
+                        .toList()) {
+                    if (Files.deleteIfExists(p)) {
+                        filesRemoved++;
+                        resourcePackTouched = true;
+                    }
+                }
+            }
+        }
+
+        // 5. Delete root patchouli_books/<book>/<target>/ and restore patchouli_books_backup_original
+        Path rootBooks = paths.patchouliBooksDir();
+        if (Files.isDirectory(rootBooks)) {
+            try (Stream<Path> books = Files.list(rootBooks)) {
+                for (Path bookDir : books.filter(Files::isDirectory).toList()) {
+                    Path targetBookLangDir = bookDir.resolve(target);
+                    if (Files.exists(targetBookLangDir)) {
+                        filesRemoved += deleteTreeCountingRegularFiles(targetBookLangDir);
+                        resourcePackTouched = true;
+                    }
+                }
+            }
+        }
+        Path patchouliBackupRoot = paths.patchouliBackupDir();
+        if (Files.isDirectory(patchouliBackupRoot)) {
+            try (Stream<Path> walk = Files.walk(patchouliBackupRoot)) {
+                for (Path backupFile : walk.filter(Files::isRegularFile).toList()) {
+                    Path rel = patchouliBackupRoot.relativize(backupFile);
+                    Path dest = rootBooks.resolve(rel);
+                    if (dest.getParent() != null) {
+                        Files.createDirectories(dest.getParent());
+                    }
+                    Files.copy(backupFile, dest, StandardCopyOption.REPLACE_EXISTING);
+                    backupsRestored++;
+                    resourcePackTouched = true;
+                }
+            }
+            deleteTreeCountingRegularFiles(patchouliBackupRoot);
+        }
+
+        return new ResetResult(filesRemoved, backupsRestored, questsTouched, resourcePackTouched);
+    }
+
+    private static int deleteTreeCountingRegularFiles(Path root) throws IOException {
+        if (!Files.exists(root)) {
+            return 0;
+        }
+        int regularRemoved = 0;
+        try (Stream<Path> walk = Files.walk(root)) {
+            for (Path p : walk.sorted(Comparator.reverseOrder()).toList()) {
+                boolean wasRegular = Files.isRegularFile(p);
+                if (Files.deleteIfExists(p) && wasRegular) {
+                    regularRemoved++;
+                }
+            }
+        }
+        return regularRemoved;
     }
 
     private static Path resolveBundleToImport(GamePaths paths) throws IOException {

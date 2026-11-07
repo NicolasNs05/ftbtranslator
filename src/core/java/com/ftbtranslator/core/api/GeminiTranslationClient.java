@@ -200,8 +200,8 @@ public final class GeminiTranslationClient implements AiTranslationClient {
                 if (msg.contains("API_KEY_INVALID") || msg.contains("API key not valid") || msg.contains("HTTP 403")) {
                     throw new IOException("API Key do Gemini inválida: verifique se copiou a chave completa no Google AI Studio.", ex);
                 }
-                // Put this model on a temporary cooldown (60s for 429 quota, 20s for 503/timeout)
-                long cooldownMs = msg.contains("429") ? 60_000L : 20_000L;
+                // Put this model on a cooldown (1h for 404 retired/unavailable models, 60s for 429 quota, 20s for 503/timeout)
+                long cooldownMs = msg.contains("404") ? 3_600_000L : (msg.contains("429") ? 60_000L : 20_000L);
                 modelCooldownUntilMillis.put(modelToTry, System.currentTimeMillis() + cooldownMs);
 
                 if (offset + 1 < candidateModels.size()) {

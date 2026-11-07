@@ -44,10 +44,10 @@ import static org.junit.jupiter.api.Assertions.*;
  *   <li>{@link SnbtParser} lang & hardcoded quest chapters (skipping {@code {translation.key}} references & escaping {@code \"})</li>
  *   <li>All 5 translation fronts + Delta Translation for partially-translated mod jars + Patchouli strict key whitelist</li>
  *   <li>Per-batch SHA-256 cache persistence + {@code pack.mcmeta} ({@code pack_format: 34})</li>
- *   <li>{@link TranslationBundleManager} export & import round-trip</li>
+ *   <li>{@link TranslationBundleManager} export, import & full reset round-trip</li>
  *   <li>Automatic Tensura modpack detection + Gemini multi-model fallback on HTTP 503</li>
  *   <li>Native Anthropic Messages API client (headers, structured output, refusal, 529 + retry-after)</li>
- *   <li>Official mod translations reused as a glossary (exact match + prompt terms) and import guard</li>
+ *   <li>Official mod translations reused as a glossary (exact match + prompt terms) and import/reset guards</li>
  * </ul>
  */
 class EndToEndCoreTest {
@@ -522,6 +522,21 @@ class EndToEndCoreTest {
             assertTrue(imported.resourcePackTouched());
             assertTrue(Files.isRegularFile(
                     instanceB.resolve("resourcepacks/AutoTranslated_Pack_PTBR/assets/tensura/lang/pt_br.json")));
+
+            // Full reset on instanceA: deletes cache, generated resource pack, KubeJS pt_br.json,
+            // FTB Quests pt_br.snbt, and restores hardcoded prologue.snbt from backup.
+            TranslationBundleManager.ResetResult reset = service.resetAll("pt_br");
+            assertTrue(reset.filesRemoved() >= 6);
+            assertEquals(1, reset.backupsRestored());
+            assertTrue(reset.questsTouched());
+            assertTrue(reset.resourcePackTouched());
+            assertFalse(Files.exists(service.paths().cacheFile("pt_br")));
+            assertFalse(Files.exists(service.paths().generatedPackDir()));
+            assertFalse(Files.exists(ptBrSnbt));
+            assertFalse(Files.exists(kubePtBr));
+            assertFalse(Files.exists(service.paths().questsBackupDir()));
+            assertEquals(originalChapter, Files.readString(chaptersDir.resolve("prologue.snbt"), StandardCharsets.UTF_8));
+            assertEquals(ProgressSnapshot.idle(), service.latestSnapshot());
         } finally {
             server.stop(0);
         }
@@ -693,6 +708,9 @@ class EndToEndCoreTest {
 
             IOException refused = assertThrows(IOException.class, () -> service.importBundle("pt_br"));
             assertTrue(refused.getMessage().contains("tradução está em andamento"), refused.getMessage());
+
+            IOException resetRefused = assertThrows(IOException.class, () -> service.resetAll("pt_br"));
+            assertTrue(resetRefused.getMessage().contains("tradução está em andamento"), resetRefused.getMessage());
 
             release.countDown();
             assertTrue(run.get(10, TimeUnit.SECONDS).success());

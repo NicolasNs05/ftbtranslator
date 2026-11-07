@@ -24,6 +24,7 @@ import java.util.Set;
  *   <li>{@code /ftbtranslate status}</li>
  *   <li>{@code /ftbtranslate cancel}</li>
  *   <li>{@code /ftbtranslate apply}</li>
+ *   <li>{@code /ftbtranslate reset}</li>
  *   <li>{@code /ftbtranslate export}</li>
  *   <li>{@code /ftbtranslate import}</li>
  *   <li>{@code /ftbtranslate apikey <key>}</li>
@@ -56,6 +57,8 @@ public final class TranslatorCommands {
                         .executes(ctx -> cancelRun(ctx.getSource())))
                 .then(Commands.literal("apply")
                         .executes(ctx -> applyPack(ctx.getSource())))
+                .then(Commands.literal("reset")
+                        .executes(ctx -> resetTranslations(ctx.getSource())))
                 .then(Commands.literal("export")
                         .executes(ctx -> exportZip(ctx.getSource())))
                 .then(Commands.literal("import")
@@ -136,6 +139,26 @@ public final class TranslatorCommands {
         source.sendSuccess(() -> Component.literal(
                 "§a[FTB Auto-Translator] §fAtivando Resource Pack e recarregando recursos..."), false);
         return 1;
+    }
+
+    private static int resetTranslations(CommandSourceStack source) {
+        TranslatorConfigData cfg = ClientConfig.toCoreData();
+        try {
+            TranslationBundleManager.ResetResult res = FtbTranslatorMod.service()
+                    .resetAll(cfg.getTargetLanguage());
+            ResourcePackApplier.removeOnMainThread(FtbTranslatorMod.service().paths(), res.questsTouched());
+            source.sendSuccess(() -> Component.literal(
+                    "§a[FTB Auto-Translator] §fReset concluído (" + res.filesRemoved()
+                            + " arquivo(s) removido(s)"
+                            + (res.backupsRestored() > 0
+                            ? ", " + res.backupsRestored() + " backup(s) original(is) restaurado(s)"
+                            : "")
+                            + ")!"), false);
+            return 1;
+        } catch (IOException e) {
+            source.sendFailure(Component.literal("§c[FTB Auto-Translator] " + e.getMessage()));
+            return 0;
+        }
     }
 
     private static int exportZip(CommandSourceStack source) {

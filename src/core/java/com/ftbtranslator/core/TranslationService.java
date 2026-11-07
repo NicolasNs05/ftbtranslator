@@ -719,6 +719,27 @@ public final class TranslationService {
     }
 
     /**
+     * Removes all generated translation files and cache for {@code targetLanguage}, restoring any backed-up
+     * original files (such as hardcoded FTB Quests chapters or root Patchouli books) and resetting the
+     * progress snapshot to idle. Refused while a translation is running.
+     */
+    public TranslationBundleManager.ResetResult resetAll(String targetLanguage) throws IOException {
+        CancellationToken resetGuard = new CancellationToken();
+        if (!activeToken.compareAndSet(null, resetGuard)) {
+            throw new IOException("Não é possível resetar enquanto uma tradução está em andamento. "
+                    + "Cancele a tradução atual primeiro.");
+        }
+        try {
+            TranslationBundleManager.ResetResult result =
+                    TranslationBundleManager.resetTranslations(paths, targetLanguage);
+            this.latestSnapshot = ProgressSnapshot.idle();
+            return result;
+        } finally {
+            activeToken.compareAndSet(resetGuard, null);
+        }
+    }
+
+    /**
      * True when {@code translation} carries exactly the same protected tokens (placeholders, formatting
      * codes...) as the source, in any order, so a human translation never breaks a {@code %s} or {@code §a}.
      */

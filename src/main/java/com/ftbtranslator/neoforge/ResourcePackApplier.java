@@ -17,9 +17,9 @@ import java.util.Collection;
 import java.util.List;
 
 /**
- * Activates the generated {@code file/AutoTranslated_Pack_PTBR} resource pack, saves client options,
- * triggers {@link Minecraft#reloadResourcePacks()} on the main client thread, and reloads FTB Quests if
- * the player is in a world.
+ * Activates or removes the generated {@code file/AutoTranslated_Pack_PTBR} resource pack, saves client
+ * options, triggers {@link Minecraft#reloadResourcePacks()} on the main client thread, and reloads FTB
+ * Quests if the player is in a world.
  */
 public final class ResourcePackApplier {
 
@@ -35,6 +35,15 @@ public final class ResourcePackApplier {
     public static void applyOnMainThread(GamePaths paths, boolean reloadQuestsIfInWorld) {
         Minecraft mc = Minecraft.getInstance();
         mc.execute(() -> applyNow(mc, paths, reloadQuestsIfInWorld));
+    }
+
+    /**
+     * Schedules deactivation of {@code file/AutoTranslated_Pack_PTBR} and resource reload on the main
+     * client thread after translations have been reset/removed.
+     */
+    public static void removeOnMainThread(GamePaths paths, boolean reloadQuestsIfInWorld) {
+        Minecraft mc = Minecraft.getInstance();
+        mc.execute(() -> removeNow(mc, reloadQuestsIfInWorld));
     }
 
     private static void applyNow(Minecraft mc, GamePaths paths, boolean reloadQuestsIfInWorld) {
@@ -91,6 +100,25 @@ public final class ResourcePackApplier {
             mc.player.displayClientMessage(
                     Component.literal("§a[FTB Auto-Translator] §fTraduções do FTB Quests aplicadas! ").append(button),
                     false);
+        }
+    }
+
+    private static void removeNow(Minecraft mc, boolean reloadQuestsIfInWorld) {
+        PackRepository repo = mc.getResourcePackRepository();
+        repo.reload();
+
+        List<String> selectedIds = new ArrayList<>(repo.getSelectedIds());
+        if (selectedIds.remove(PACK_ID)) {
+            repo.setSelected(selectedIds);
+        }
+        mc.options.resourcePacks.remove(PACK_ID);
+        mc.options.save();
+
+        mc.reloadResourcePacks();
+        sendChatInfo(mc, "Cache e traduções removidos! Recursos do jogo recarregados.");
+
+        if (reloadQuestsIfInWorld && mc.player != null && mc.player.connection != null) {
+            mc.player.connection.sendCommand("ftbquests reload");
         }
     }
 

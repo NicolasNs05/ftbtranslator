@@ -96,10 +96,13 @@ public final class TranslatorDashboardScreen extends Screen {
     // Packs
     private Button exportZipBtn;
     private Button importZipBtn;
+    // Footer
+    private Button resetBtn;
 
     private boolean maskApiKey = true;
     private boolean testingConnection = false;
     private boolean cancelRequested = false;
+    private long confirmResetUntilMillis = 0L;
     private String bannerMessage = "Pronto. Configure sua API Key ou importe um pacote .zip.";
     private int bannerColor = 0xFFE0E0E0;
 
@@ -146,6 +149,16 @@ public final class TranslatorDashboardScreen extends Screen {
             case PACKS -> initPacksTab(left);
         }
 
+        resetBtn = this.addRenderableWidget(Button.builder(
+                        Component.literal("§c🗑 Resetar Cache e Traduções"),
+                        b -> triggerResetTranslations())
+                .bounds(left, FOOTER_Y, 185, 20)
+                .build());
+        resetBtn.setTooltip(tip("Apaga o cache de tradução e remove todas as traduções geradas pelo mod "
+                + "(Resource Pack AutoTranslated_Pack_PTBR, FTB Quests, KubeJS e livros do Patchouli), "
+                + "restaurando os arquivos originais e recarregando o jogo. Exige dois cliques para evitar "
+                + "cliques acidentais."));
+
         this.addRenderableWidget(Button.builder(Component.literal("Fechar"), b -> onClose())
                 .bounds(left + PANEL_WIDTH - 82, FOOTER_Y, 82, 20)
                 .build());
@@ -157,6 +170,7 @@ public final class TranslatorDashboardScreen extends Screen {
         if (tab == currentTab) {
             return;
         }
+        confirmResetUntilMillis = 0L;
         currentTab = tab;
         lastTab = tab;
         this.rebuildWidgets();
@@ -169,6 +183,7 @@ public final class TranslatorDashboardScreen extends Screen {
         providerBtn = guideBtn = toggleMaskBtn = pasteKeyBtn = testConnBtn = glossaryBtn = rateModeBtn = null;
         apiKeyBox = rateBox = null;
         exportZipBtn = importZipBtn = null;
+        resetBtn = null;
     }
 
     // ------------------------------------------------------------------ tab: Início
@@ -674,6 +689,7 @@ public final class TranslatorDashboardScreen extends Screen {
         if (isBusy()) {
             return;
         }
+        confirmResetUntilMillis = 0L;
         persistWorkingConfig();
         testingConnection = true;
         refreshButtonStates();
@@ -696,6 +712,7 @@ public final class TranslatorDashboardScreen extends Screen {
         if (isBusy()) {
             return;
         }
+        confirmResetUntilMillis = 0L;
         persistWorkingConfig();
         String validation = workingConfig.validateForTranslation();
         if (validation != null) {
@@ -752,6 +769,7 @@ public final class TranslatorDashboardScreen extends Screen {
         if (isBusy()) {
             return;
         }
+        confirmResetUntilMillis = 0L;
         try {
             TranslationBundleManager.ExportResult res = FtbTranslatorMod.service()
                     .exportBundle(workingConfig.getTargetLanguage());
@@ -766,6 +784,7 @@ public final class TranslatorDashboardScreen extends Screen {
         if (isBusy()) {
             return;
         }
+        confirmResetUntilMillis = 0L;
         try {
             TranslationBundleManager.ImportResult res = FtbTranslatorMod.service()
                     .importBundle(workingConfig.getTargetLanguage());
@@ -775,6 +794,35 @@ public final class TranslatorDashboardScreen extends Screen {
         } catch (IOException e) {
             setBanner("Erro ao importar: " + e.getMessage(), 0xFFFF5555);
         }
+    }
+
+    private void triggerResetTranslations() {
+        if (isBusy()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now > confirmResetUntilMillis) {
+            confirmResetUntilMillis = now + 5_000L;
+            setBanner("⚠ Atenção: clique novamente em 'Confirmar Reset' em até 5s para apagar cache e traduções.",
+                    0xFFFFAA00);
+            refreshButtonStates();
+            return;
+        }
+        confirmResetUntilMillis = 0L;
+        try {
+            TranslationBundleManager.ResetResult res = FtbTranslatorMod.service()
+                    .resetAll(workingConfig.getTargetLanguage());
+            ResourcePackApplier.removeOnMainThread(FtbTranslatorMod.service().paths(), res.questsTouched());
+            String msg = "Reset concluído! " + res.filesRemoved() + " arquivo(s) removido(s)"
+                    + (res.backupsRestored() > 0
+                    ? " e " + res.backupsRestored() + " backup(s) original(is) restaurado(s)."
+                    : ".")
+                    + " Recursos recarregados!";
+            setBanner(msg, 0xFF55FF55);
+        } catch (IOException e) {
+            setBanner("Erro ao resetar traduções: " + e.getMessage(), 0xFFFF5555);
+        }
+        refreshButtonStates();
     }
 
     public void setBanner(String message, int color) {
@@ -792,6 +840,8 @@ public final class TranslatorDashboardScreen extends Screen {
         boolean running = FtbTranslatorMod.service().isRunning();
         if (!running) {
             cancelRequested = false;
+        } else {
+            confirmResetUntilMillis = 0L;
         }
         boolean paused = FtbTranslatorMod.service().isPaused();
         boolean canEditConfig = !running && !testingConnection;
@@ -858,6 +908,16 @@ public final class TranslatorDashboardScreen extends Screen {
         if (importZipBtn != null) {
             importZipBtn.active = canEditConfig;
             importZipBtn.setMessage(Component.literal(canEditConfig ? "§dImportar" : "Importar"));
+        }
+        if (resetBtn != null) {
+            resetBtn.active = canEditConfig;
+            boolean confirming = canEditConfig && System.currentTimeMillis() <= confirmResetUntilMillis;
+            if (confirming) {
+                resetBtn.setMessage(Component.literal("§4§l⚠ Clique p/ Confirmar Reset"));
+            } else {
+                resetBtn.setMessage(Component.literal(
+                        canEditConfig ? "§c🗑 Resetar Cache e Traduções" : "🗑 Resetar Cache e Traduções"));
+            }
         }
     }
 

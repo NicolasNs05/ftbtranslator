@@ -10,7 +10,8 @@ import java.util.function.Function;
  * In <b>manual</b> mode the rate is fixed. In <b>adaptive</b> (automatic) mode it follows the account:
  * <ul>
  *   <li>When the provider reports the account's request limit in a response header (Anthropic:
- *       {@value #ANTHROPIC_REQUESTS_LIMIT_HEADER}), the rate jumps to 90% of it.</li>
+ *       {@value #ANTHROPIC_REQUESTS_LIMIT_HEADER}, OpenAI/Groq/OpenRouter:
+ *       {@value #OPENAI_REQUESTS_LIMIT_HEADER}), the rate jumps to 90% of it.</li>
  *   <li>Otherwise it grows by ~20% after every {@value #SUCCESSES_TO_GROW} successful requests, up to a
  *       ceiling, so faster paid tiers are used without hard-coding them.</li>
  *   <li>Every HTTP 429 halves it, so free tiers settle just below their real limit.</li>
@@ -22,6 +23,7 @@ public final class RateLimiter {
     public static final int MAX_RPM = 600;
     static final int SUCCESSES_TO_GROW = 10;
     static final String ANTHROPIC_REQUESTS_LIMIT_HEADER = "anthropic-ratelimit-requests-limit";
+    static final String OPENAI_REQUESTS_LIMIT_HEADER = "x-ratelimit-limit-requests";
 
     private final boolean adaptive;
     private final int growthCeiling;
@@ -75,7 +77,13 @@ public final class RateLimiter {
         if (!adaptive || requestsPerMinute <= 0) {
             return -1;
         }
-        int accountLimit = parsePositiveInt(header == null ? null : header.apply(ANTHROPIC_REQUESTS_LIMIT_HEADER));
+        int accountLimit = -1;
+        if (header != null) {
+            accountLimit = parsePositiveInt(header.apply(ANTHROPIC_REQUESTS_LIMIT_HEADER));
+            if (accountLimit <= 0) {
+                accountLimit = parsePositiveInt(header.apply(OPENAI_REQUESTS_LIMIT_HEADER));
+            }
+        }
         if (accountLimit > 0) {
             accountLimitKnown = true;
             int target = Math.min(MAX_RPM, Math.max(1, (int) Math.floor(accountLimit * 0.9)));

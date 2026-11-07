@@ -263,6 +263,7 @@ public final class TranslationService {
 
             // Collect unique strings in task order and deduplicate by masked template (__TK0__...) across all mods
             Set<String> uniqueStrings = new LinkedHashSet<>();
+            Set<String> alreadyQueuedOriginals = new LinkedHashSet<>();
             Map<String, MaskedText> toTranslate = new LinkedHashMap<>();
             Map<String, List<Map.Entry<String, MaskedText>>> originalsByTemplate = new LinkedHashMap<>();
             taskCompleted = new boolean[tasks.size()];
@@ -278,6 +279,10 @@ public final class TranslationService {
                     if (resolvedTranslations.containsKey(s)) {
                         return;
                     }
+                    if (alreadyQueuedOriginals.contains(s)) {
+                        pendingForTask.add(s);
+                        return;
+                    }
                     String cached = cache.get(s);
                     if (cached != null && !cached.isBlank()) {
                         resolvedTranslations.put(s, cached);
@@ -288,7 +293,7 @@ public final class TranslationService {
                         resolvedTranslations.put(s, s);
                         return;
                     }
-                    String human = glossary.lookup(s);
+                    String human = glossary.lookupPreservingOuterFormatting(s);
                     if (human != null && placeholdersMatch(masked, human)) {
                         resolvedTranslations.put(s, human);
                         glossaryHits[0]++;
@@ -301,18 +306,10 @@ public final class TranslationService {
                         return;
                     }
                     toTranslate.putIfAbsent(templateKey, masked);
-                    List<Map.Entry<String, MaskedText>> group = originalsByTemplate.computeIfAbsent(
-                            templateKey, k -> new ArrayList<>(1));
-                    boolean alreadyInGroup = false;
-                    for (Map.Entry<String, MaskedText> existing : group) {
-                        if (existing.getKey().equals(s)) {
-                            alreadyInGroup = true;
-                            break;
-                        }
-                    }
-                    if (!alreadyInGroup) {
-                        group.add(Map.entry(s, masked));
-                    }
+                    originalsByTemplate
+                            .computeIfAbsent(templateKey, k -> new ArrayList<>(1))
+                            .add(Map.entry(s, masked));
+                    alreadyQueuedOriginals.add(s);
                     pendingForTask.add(s);
                 });
                 taskPendingStrings.add(pendingForTask);
@@ -341,7 +338,7 @@ public final class TranslationService {
             }
 
             List<List<Map.Entry<String, MaskedText>>> batches = buildAdaptiveBatches(
-                    toTranslate, config.getBatchSize(), config.getMaxBatchChars());
+                toTranslate, config.getBatchSize(), config.getMaxBatchChars());
             int batchTotal = batches.size();
             int stringsTotal = toTranslate.size();
 

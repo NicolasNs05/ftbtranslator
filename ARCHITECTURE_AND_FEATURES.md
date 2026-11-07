@@ -246,6 +246,12 @@ Antes de qualquer string ser enviada para a IA, [`TokenMasker.mask(String)`](src
 
 ---
 
+## 7.1. Build Automático (GitHub Actions)
+O workflow [`.github/workflows/build.yml`](.github/workflows/build.yml) compila o mod com Java 21 e roda `./gradlew build` (inclui os testes do `coreTest`) a cada *push* e *pull request*:
+* **Download do `.jar`:** aba **Actions** do repositório → execução desejada → seção **Artifacts** (`ftbtranslator-<versão>-build.<n>-<commit>`; o `.jar` fica disponível por 30 dias).
+* **Release:** ao enviar uma tag de versão (`git tag v1.0.1` + `git push origin v1.0.1`), o workflow compila com essa versão (`-Pmod_version=1.0.1`) e cria uma **Release** no GitHub com o `.jar` anexado e notas geradas automaticamente.
+* Se os testes falharem, o relatório (`build/reports/tests/`) é publicado como artefato para análise.
+
 ## 8. Roadmap de Evolução Futura (Próximas Etapas Planejadas)
 
 ### 8.1. Reformulação de UX/UI Orientada ao Usuário Leigo

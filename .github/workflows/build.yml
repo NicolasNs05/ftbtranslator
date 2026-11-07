@@ -1,0 +1,86 @@
+name: Build
+
+# Compila o mod e roda os testes do core a cada push e pull request, deixando o .jar
+# para baixar na aba Actions. Ao enviar uma tag de versão (ex.: v1.0.1), também cria
+# uma Release no GitHub com o .jar anexado, já com essa versão no nome do arquivo.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Instalar Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Preparar Gradle (com cache)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Definir versão do .jar
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" == v* ]]; then
+            echo "MOD_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            base=$(grep '^mod_version=' gradle.properties | cut -d= -f2)
+            echo "MOD_VERSION=${base}-build.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          fi
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Compilar e testar
+        run: |
+          chmod +x gradlew
+          ./gradlew build -Pmod_version="$MOD_VERSION" --no-daemon
+
+      - name: Publicar relatório dos testes (se falhar)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-testes-${{ github.run_number }}
+          path: build/reports/tests/
+          retention-days: 14
+
+      - name: Disponibilizar o .jar para download
+        uses: actions/upload-artifact@v4
+        with:
+          name: ftbtranslator-${{ env.MOD_VERSION }}-${{ env.SHORT_SHA }}
+          path: build/libs/ftbtranslator-*.jar
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Baixar o .jar compilado
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ftbtranslator-*
+          path: dist
+          merge-multiple: true
+
+      - name: Criar Release com o .jar
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.jar
+          generate_release_notes: true

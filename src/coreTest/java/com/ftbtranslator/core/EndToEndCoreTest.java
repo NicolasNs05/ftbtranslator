@@ -850,15 +850,11 @@ class EndToEndCoreTest {
                 JsonObject input = JsonParser.parseString(
                         req.getAsJsonArray("messages").get(0).getAsJsonObject().get("content").getAsString())
                         .getAsJsonObject();
-                com.google.gson.JsonArray items = new com.google.gson.JsonArray();
-                for (Map.Entry<String, JsonElement> e : input.entrySet()) {
-                    JsonObject item = new JsonObject();
-                    item.addProperty("id", e.getKey());
-                    item.addProperty("text", "[PT-BR] " + e.getValue().getAsString());
-                    items.add(item);
-                }
+                // Compact structured reply: same keys as the batch.
                 JsonObject structured = new JsonObject();
-                structured.add("translations", items);
+                for (Map.Entry<String, JsonElement> e : input.entrySet()) {
+                    structured.addProperty(e.getKey(), "[PT-BR] " + e.getValue().getAsString());
+                }
                 JsonObject thinking = new JsonObject();
                 thinking.addProperty("type", "thinking");
                 thinking.addProperty("thinking", "");
@@ -912,16 +908,24 @@ class EndToEndCoreTest {
             assertEquals("medium", req.getAsJsonObject("output_config").get("effort").getAsString());
             JsonObject format = req.getAsJsonObject("output_config").getAsJsonObject("format");
             assertEquals("json_schema", format.get("type").getAsString());
-            assertFalse(format.getAsJsonObject("schema").get("additionalProperties").getAsBoolean());
+            JsonObject schema = format.getAsJsonObject("schema");
+            assertFalse(schema.get("additionalProperties").getAsBoolean());
+            // One string property per batch key, all required: the reply is {"0":"...","1":"..."}.
+            assertEquals(java.util.Set.of("0", "1"), schema.getAsJsonObject("properties").keySet());
+            assertEquals(2, schema.getAsJsonArray("required").size());
 
-            // Haiku: no server-side fallback (not offered for it).
+            // Haiku: no server-side fallback (not offered for it); effort follows the configuration.
             requests.clear();
             requestHeaders.clear();
             cfg.setModel("claude-haiku-5-5");
+            cfg.setClaudeEffort("LOW");
             com.ftbtranslator.core.api.TranslationClientFactory.create(cfg, null)
                     .translateBatch(Map.of("0", "Gold"), "Traduza.", new CancellationToken());
             assertFalse(requests.get(0).has("fallbacks"));
             assertNull(requestHeaders.get(0).get("anthropic-beta"));
+            assertEquals("low", requests.get(0).getAsJsonObject("output_config").get("effort").getAsString());
+            cfg.setClaudeEffort("ultra");
+            assertEquals("medium", cfg.getClaudeEffort(), "unknown effort falls back to medium");
         } finally {
             server.stop(0);
         }
@@ -1024,6 +1028,104 @@ class EndToEndCoreTest {
         usage.addAnthropic(null);
         assertEquals(1995L, usage.total());
         assertEquals("12.345", ProgressSnapshot.formatCount(12_345L));
+    }
+
+    @Test
+    void failedTranslationsAreRetriedOnTheNextRunEvenWithDeltaTranslation(@TempDir Path tempRoot) throws Exception {
+        Path instance = tempRoot.resolve("instance");
+        Path modsDir = instance.resolve("mods");
+        Files.createDirectories(modsDir);
+        try (OutputStream fos = Files.newOutputStream(modsDir.resolve("gears.jar"));
+             ZipOutputStream zos = new ZipOutputStream(fos)) {
+            writeZipText(zos, "assets/gears/lang/en_us.json", """
+                    { "item.gears.ok": "Copper Gear", "item.gears.bad": "Deal %s damage" }
+                    """);
+        }
+        Path kubeLangDir = instance.resolve("kubejs/assets/kubejs/lang");
+        Files.createDirectories(kubeLangDir);
+        Files.writeString(kubeLangDir.resolve("en_us.json"), """
+                { "item.kubejs.bad": "Gain %d mana" }
+                """, StandardCharsets.UTF_8);
+
+        // First run: the AI drops the __TK0__ marker of every text with a placeholder (rejected, kept in English).
+        boolean[] breakPlaceholders = {true};
+        List<String> sentTexts = Collections.synchronizedList(new ArrayList<>());
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            JsonObject req = JsonParser.parseString(new String(
+                    exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject();
+            JsonObject input = JsonParser.parseString(req.getAsJsonArray("messages").get(1).getAsJsonObject()
+                    .get("content").getAsString()).getAsJsonObject();
+            JsonObject out = new JsonObject();
+            for (Map.Entry<String, JsonElement> e : input.entrySet()) {
+                String text = e.getValue().getAsString();
+                sentTexts.add(text);
+                String translated = "[PT-BR] " + text;
+                out.addProperty(e.getKey(), breakPlaceholders[0] ? translated.replace("__TK0__", "") : translated);
+            }
+            JsonObject msg = new JsonObject();
+            msg.addProperty("content", out.toString());
+            JsonObject choice = new JsonObject();
+            choice.add("message", msg);
+            com.google.gson.JsonArray choices = new com.google.gson.JsonArray();
+            choices.add(choice);
+            JsonObject resp = new JsonObject();
+            resp.add("choices", choices);
+            byte[] bytes = resp.toString().getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            TranslatorConfigData cfg = mockConfig(server);
+            assertTrue(cfg.isSkipAlreadyTranslatedMods(), "Delta Translation is on by default");
+            List<String> logs = Collections.synchronizedList(new ArrayList<>());
+            TranslationCallback logCapture = new TranslationCallback() {
+                @Override
+                public void onProgress(ProgressSnapshot snapshot) {
+                }
+
+                @Override
+                public void onLog(LogLevel level, String message) {
+                    logs.add(level + " " + message);
+                }
+
+                @Override
+                public void onComplete(TranslationReport report) {
+                }
+
+                @Override
+                public void onError(String message, Throwable cause) {
+                }
+            };
+            TranslationService service = new TranslationService(instance);
+            EnumSet<TranslationScope> scopes = EnumSet.of(TranslationScope.MODS, TranslationScope.KUBEJS);
+
+            assertTrue(service.runSynchronously(cfg, scopes, logCapture).success());
+            assertEquals(2, service.latestSnapshot().stringsFailed());
+            Path modOut = instance.resolve("resourcepacks/AutoTranslated_Pack_PTBR/assets/gears/lang/pt_br.json");
+            assertTrue(Files.readString(modOut, StandardCharsets.UTF_8).contains("\"Deal %s damage\""),
+                    "a rejected translation keeps the original text");
+            // Each rejected text is listed in the log, with the reason.
+            assertTrue(logs.stream().anyMatch(l -> l.startsWith("WARN") && l.contains("Deal %s damage")
+                    && l.contains("códigos de formatação")), logs.toString());
+            assertTrue(logs.stream().anyMatch(l -> l.contains("Gain %d mana")), logs.toString());
+
+            // Second run ("Tentar falhas de novo"): only the two failures go back to the AI.
+            breakPlaceholders[0] = false;
+            sentTexts.clear();
+            assertTrue(service.runSynchronously(cfg, scopes, null).success());
+            assertEquals(List.of("Deal __TK0__ damage", "Gain __TK0__ mana"), sentTexts.stream().sorted().toList());
+            assertEquals(0, service.latestSnapshot().stringsFailed());
+            String modPtBr = Files.readString(modOut, StandardCharsets.UTF_8);
+            assertTrue(modPtBr.contains("[PT-BR] Deal %s damage"), modPtBr);
+            assertTrue(modPtBr.contains("[PT-BR] Copper Gear"), modPtBr);
+            String kubePtBr = Files.readString(kubeLangDir.resolve("pt_br.json"), StandardCharsets.UTF_8);
+            assertTrue(kubePtBr.contains("[PT-BR] Gain %d mana"), kubePtBr);
+        } finally {
+            server.stop(0);
+        }
     }
 
     private static TranslatorConfigData mockConfig(HttpServer server) {

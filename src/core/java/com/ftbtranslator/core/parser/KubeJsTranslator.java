@@ -138,7 +138,9 @@ public final class KubeJsTranslator {
                 }
                 if (deltaMode) {
                     String existingLocal = existingLocalPtMap.get(key);
-                    if (existingLocal != null && !existingLocal.isBlank()) {
+                    // A previous failure was written as the source text: retry it instead of keeping it.
+                    if (existingLocal != null && !existingLocal.isBlank()
+                            && !JarModExtractor.isUntranslatedCopy(existingLocal, val)) {
                         pretranslatedPtMap.put(key, existingLocal);
                         effectiveSourceMap.put(key, existingLocal);
                         if (jarAcc != null) {

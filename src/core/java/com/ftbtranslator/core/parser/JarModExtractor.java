@@ -158,7 +158,8 @@ public final class JarModExtractor {
                     try {
                         Map<String, String> onDisk = JsonLangIO.readLangFile(generatedLang);
                         for (Map.Entry<String, String> e : onDisk.entrySet()) {
-                            if (e.getValue() != null && !e.getValue().isBlank()) {
+                            if (e.getValue() != null && !e.getValue().isBlank()
+                                    && !isUntranslatedCopy(e.getValue(), acc.sourceEntries.get(e.getKey()))) {
                                 acc.existingPtBrEntries.putIfAbsent(e.getKey(), e.getValue());
                             }
                         }
@@ -395,6 +396,16 @@ public final class JarModExtractor {
                 }
             }
         }
+    }
+
+    /**
+     * True when a value in a file this mod generated is still the source text: a translation that failed (the
+     * original is kept so the game shows something). Such keys must be retried instead of skipped by Delta
+     * Translation. Texts that are legitimately identical in both languages are retried too, but they resolve
+     * from the cache without any AI call.
+     */
+    public static boolean isUntranslatedCopy(String generatedValue, String sourceValue) {
+        return sourceValue != null && generatedValue.strip().equals(sourceValue.strip());
     }
 
     /**

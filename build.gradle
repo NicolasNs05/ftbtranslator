@@ -130,6 +130,10 @@ tasks.register('coreTest', Test) {
     }
 }
 
+tasks.named('test') {
+    dependsOn 'coreTest'
+}
+
 tasks.named('check') {
     dependsOn 'coreTest'
 }

@@ -553,6 +553,31 @@ class EndToEndCoreTest {
         assertEquals(Map.of("Iron Plate", "Placa de Ferro", "Energy", "Energia"), terms);
         assertEquals(List.of("Iron Plate", "Energy"), new ArrayList<>(terms.keySet()));
         assertEquals(1, glossary.termsFor(List.of("iron plate and energy"), 1).size());
+
+        // Stopwords ("Not", "From", "All") and identical pairs ("Status" = "Status") still work on exact lookup(),
+        // but never pollute prompt hints inside longer sentences; multi-word compound terms win when capped.
+        glossary.addPair("Not", "Não");
+        glossary.addPair("From", "De");
+        glossary.addPair("All", "Todas");
+        glossary.addPair("Status", "Status");
+        glossary.addPair("Unique Skill", "Habilidade Única");
+        assertEquals("Não", glossary.lookup("Not"));
+        assertEquals("Status", glossary.lookup("Status"));
+        Map<String, String> filteredHints = glossary.termsFor(
+                List.of("Not all energy from status unlocks a Unique Skill"), 10);
+        assertFalse(filteredHints.containsKey("Not"));
+        assertFalse(filteredHints.containsKey("From"));
+        assertFalse(filteredHints.containsKey("All"));
+        assertFalse(filteredHints.containsKey("Status"));
+        assertEquals(Map.of("Energy", "Energia", "Unique Skill", "Habilidade Única"), filteredHints);
+        // When capped at 1 slot, the 2-word compound term ("Unique Skill") is prioritized over 1-word ("Energy").
+        assertEquals(Map.of("Unique Skill", "Habilidade Única"),
+                glossary.termsFor(List.of("Energy and Unique Skill"), 1));
+
+        // Outer formatting codes (§6...§r, &a...) and case variations still resolve from the human glossary.
+        assertEquals("§6Placa de Ferro§r", glossary.lookupPreservingOuterFormatting("§6Iron Plate§r"));
+        assertEquals("&aEnergia", glossary.lookupPreservingOuterFormatting("&aEnergy"));
+        assertEquals("Placa de Ferro", glossary.lookup("iron plate"));
     }
 
     @Test
@@ -967,6 +992,10 @@ class EndToEndCoreTest {
             auto.onSuccess(name -> null);
         }
         assertEquals(90, auto.requestsPerMinute());
+
+        // Also recognizes OpenAI/Groq/OpenRouter x-ratelimit-limit-requests header.
+        com.ftbtranslator.core.api.RateLimiter openAiAuto = new com.ftbtranslator.core.api.RateLimiter(30, true, 60);
+        assertEquals(180, openAiAuto.onSuccess(name -> name.equals("x-ratelimit-limit-requests") ? "200" : null));
 
         com.ftbtranslator.core.api.RateLimiter manual = new com.ftbtranslator.core.api.RateLimiter(15);
         for (int i = 0; i < 50; i++) {

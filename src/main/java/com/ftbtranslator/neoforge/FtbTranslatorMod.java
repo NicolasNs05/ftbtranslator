@@ -7,6 +7,7 @@ import com.ftbtranslator.core.TranslationReport;
 import com.ftbtranslator.core.TranslationScope;
 import com.ftbtranslator.core.TranslationService;
 import com.ftbtranslator.core.TranslatorConfigData;
+import com.ftbtranslator.neoforge.gui.TranslationHudOverlay;
 import com.ftbtranslator.neoforge.gui.TranslatorDashboardScreen;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.logging.LogUtils;
@@ -19,9 +20,12 @@ import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
+import net.neoforged.neoforge.client.event.CustomizeGuiOverlayEvent;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
+import net.neoforged.neoforge.client.event.RegisterGuiLayersEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
+import net.neoforged.neoforge.client.gui.VanillaGuiLayers;
 import net.neoforged.neoforge.common.NeoForge;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
@@ -103,6 +107,11 @@ public final class FtbTranslatorMod {
         // 3. Register F9 keybinding on the Mod event bus
         modEventBus.addListener(this::onRegisterKeyMappings);
 
+        // 3b. Boss-bar style translation progress on the HUD (top centre, under any real boss bars)
+        modEventBus.addListener(this::onRegisterGuiLayers);
+        NeoForge.EVENT_BUS.addListener(
+                CustomizeGuiOverlayEvent.BossEventProgress.class, TranslationHudOverlay::onBossEventProgress);
+
         // 4. Register client commands (/ftbtranslate) and keybind tick handler on the NeoForge event bus
         NeoForge.EVENT_BUS.addListener(this::onRegisterClientCommands);
         NeoForge.EVENT_BUS.addListener(this::onClientTick);
@@ -134,6 +143,10 @@ public final class FtbTranslatorMod {
                 GLFW.GLFW_KEY_F9,
                 KEY_CATEGORY);
         event.register(openDashboardKey);
+    }
+
+    private void onRegisterGuiLayers(RegisterGuiLayersEvent event) {
+        event.registerAbove(VanillaGuiLayers.BOSS_OVERLAY, TranslationHudOverlay.LAYER_ID, TranslationHudOverlay::render);
     }
 
     private void onRegisterClientCommands(RegisterClientCommandsEvent event) {

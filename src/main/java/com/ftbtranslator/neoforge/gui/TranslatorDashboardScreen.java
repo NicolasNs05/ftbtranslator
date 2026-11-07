@@ -71,6 +71,7 @@ public final class TranslatorDashboardScreen extends Screen {
 
     // Home
     private Button contextBtn;
+    private Button hudBarBtn;
     private Button startBtn;
     private Button pauseResumeBtn;
     private Button cancelBtn;
@@ -162,7 +163,7 @@ public final class TranslatorDashboardScreen extends Screen {
     }
 
     private void clearWidgetRefs() {
-        contextBtn = startBtn = pauseResumeBtn = cancelBtn = applyReloadBtn = null;
+        contextBtn = hudBarBtn = startBtn = pauseResumeBtn = cancelBtn = applyReloadBtn = null;
         ftbQuestsBtn = kubeJsBtn = modsBtn = patchouliBtn = deltaBtn = null;
         modFilterBox = null;
         providerBtn = guideBtn = toggleMaskBtn = pasteKeyBtn = testConnBtn = glossaryBtn = rateModeBtn = null;
@@ -190,7 +191,19 @@ public final class TranslatorDashboardScreen extends Screen {
                 + "Tensura (anime Slime), Tech (máquinas e energia), Magia (fantasia) ou Padrão. "
                 + "É detectado automaticamente quando o mod Tensura está instalado."));
 
-        int rowY = CONTENT_Y + 92;
+        hudBarBtn = this.addRenderableWidget(Button.builder(
+                        hudBarLabel(),
+                        b -> {
+                            ClientConfig.setShowHudBar(!ClientConfig.showHudBar());
+                            b.setMessage(hudBarLabel());
+                        })
+                .bounds(left + 210, CONTENT_Y + 16, 210, 20)
+                .build());
+        hudBarBtn.setTooltip(tip("Mostra o progresso da tradução no topo da tela enquanto você joga, no estilo "
+                + "da barra de chefe (como a do Wither), com os tokens gastos. Some com F1 e enquanto este "
+                + "painel está aberto."));
+
+        int rowY = CONTENT_Y + 98;
         startBtn = this.addRenderableWidget(Button.builder(
                         Component.literal("▶ Iniciar Tradução"),
                         b -> triggerStartTranslation())
@@ -242,27 +255,38 @@ public final class TranslatorDashboardScreen extends Screen {
 
         // Efficiency metrics of the current / last run
         ProgressSnapshot snap = FtbTranslatorMod.service().latestSnapshot();
-        int metricsY = CONTENT_Y + 42;
-        g.fill(left, metricsY, left + PANEL_WIDTH, metricsY + 44, 0x80101828);
-        g.renderOutline(left, metricsY, PANEL_WIDTH, 44, 0xFF2A3A5A);
+        int metricsY = CONTENT_Y + 40;
+        g.fill(left, metricsY, left + PANEL_WIDTH, metricsY + 54, 0x80101828);
+        g.renderOutline(left, metricsY, PANEL_WIDTH, 54, 0xFF2A3A5A);
         g.drawString(this.font, "§7Eficiência da tradução " + (snap.running() ? "atual" : "mais recente") + ":",
-                left + 6, metricsY + 5, 0xFFA0A0A0);
+                left + 6, metricsY + 4, 0xFFA0A0A0);
 
         int fromCache = snap.stringsFromCacheOnly();
         int fromGlossary = snap.stringsFromGlossary();
         int byAi = snap.stringsTranslatedByAi();
         int failed = snap.stringsFailed();
         int colW = PANEL_WIDTH / 4;
-        drawMetric(g, left + 6, metricsY + 18, "Cache", fromCache, 0xFF55FF55);
-        drawMetric(g, left + 6 + colW, metricsY + 18, "Glossário", fromGlossary, 0xFF55FFFF);
-        drawMetric(g, left + 6 + colW * 2, metricsY + 18, "IA", byAi, 0xFFFFFF55);
-        drawMetric(g, left + 6 + colW * 3, metricsY + 18, "Falhas", failed, failed > 0 ? 0xFFFF5555 : 0xFF808080);
+        drawMetric(g, left + 6, metricsY + 16, "Cache", fromCache, 0xFF55FF55);
+        drawMetric(g, left + 6 + colW, metricsY + 16, "Glossário", fromGlossary, 0xFF55FFFF);
+        drawMetric(g, left + 6 + colW * 2, metricsY + 16, "IA", byAi, 0xFFFFFF55);
+        drawMetric(g, left + 6 + colW * 3, metricsY + 16, "Falhas", failed, failed > 0 ? 0xFFFF5555 : 0xFF808080);
 
         int total = fromCache + fromGlossary + byAi + failed;
         String saving = total == 0
                 ? "§8Inicie uma tradução para ver quanto foi resolvido sem gastar tokens."
                 : "§7Resolvido sem IA: §a" + Math.round(100.0 * (fromCache + fromGlossary) / total) + "%";
-        g.drawString(this.font, saving, left + 6, metricsY + 32, 0xFFFFFFFF);
+        g.drawString(this.font, saving, left + 6, metricsY + 28, 0xFFFFFFFF);
+
+        String tokens = snap.totalTokens() == 0
+                ? "§7Tokens: §80 §8(o provedor informa ao responder)"
+                : "§7Tokens: §f" + ProgressSnapshot.formatCount(snap.totalTokens())
+                + " §8(entrada §7" + ProgressSnapshot.formatCount(snap.inputTokens())
+                + "§8 · saída §7" + ProgressSnapshot.formatCount(snap.outputTokens()) + "§8)";
+        g.drawString(this.font, tokens, left + 6, metricsY + 40, 0xFFFFFFFF);
+    }
+
+    private static Component hudBarLabel() {
+        return checkboxLabel(ClientConfig.showHudBar(), "Barra de progresso no HUD");
     }
 
     private void drawMetric(GuiGraphics g, int x, int y, String label, int value, int color) {

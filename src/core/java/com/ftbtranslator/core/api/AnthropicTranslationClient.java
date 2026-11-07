@@ -49,9 +49,16 @@ public final class AnthropicTranslationClient implements AiTranslationClient {
     private final String model;
     private final String apiKey;
     private final HttpRetryHelper http;
+    private final TokenUsage usage;
 
     public AnthropicTranslationClient(TranslatorConfigData config, RateLimiter rateLimiter,
                                       TranslationCallback callback) {
+        this(config, rateLimiter, callback, new TokenUsage());
+    }
+
+    public AnthropicTranslationClient(TranslatorConfigData config, RateLimiter rateLimiter,
+                                      TranslationCallback callback, TokenUsage usage) {
+        this.usage = usage;
         this.provider = config.getProvider();
         this.baseUrl = config.effectiveBaseUrl();
         this.model = config.effectiveModel();
@@ -93,6 +100,7 @@ public final class AnthropicTranslationClient implements AiTranslationClient {
             }
             throw ex;
         }
+        usage.addAnthropic(responseBody);
         return parseTranslations(responseBody);
     }
 

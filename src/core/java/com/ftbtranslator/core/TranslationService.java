@@ -2,6 +2,7 @@ package com.ftbtranslator.core;
 
 import com.ftbtranslator.core.api.AiTranslationClient;
 import com.ftbtranslator.core.api.PromptBuilder;
+import com.ftbtranslator.core.api.TokenUsage;
 import com.ftbtranslator.core.api.TranslationClientFactory;
 import com.ftbtranslator.core.bundle.TranslationBundleManager;
 import com.ftbtranslator.core.cache.TranslationCache;
@@ -186,6 +187,7 @@ public final class TranslationService {
                 config.getCustomContext());
         activeCache.set(cache);
         TranslationGlossary glossary = new TranslationGlossary();
+        TokenUsage tokenUsage = new TokenUsage();
 
         try {
             if (scopes.isEmpty()) {
@@ -205,7 +207,7 @@ public final class TranslationService {
             }
 
             updateProgress(callback, new ProgressSnapshot(
-                    "Escaneando arquivos", "Iniciando varredura...", 0, 0, 0, 0, 0, 0, 0, 0, 0, true, false));
+                    "Escaneando arquivos", "Iniciando varredura...", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0L, 0L, true, false));
             log(callback, LogLevel.INFO, "Iniciando tradução (" + config.getProvider().displayName()
                     + " / " + config.effectiveModel() + " / Contexto: " + config.getContextPreset().displayName() + ")");
 
@@ -350,7 +352,7 @@ public final class TranslationService {
 
             // Phase 2: Translate uncached batches with AI and flush completed files after every batch
             if (!batches.isEmpty()) {
-                AiTranslationClient client = TranslationClientFactory.create(config, callback);
+                AiTranslationClient client = TranslationClientFactory.create(config, callback, tokenUsage);
                 String systemPrompt = PromptBuilder.buildSystemPrompt(config);
                 int consecutiveBatchFailures = 0;
 
@@ -364,7 +366,7 @@ public final class TranslationService {
                             "Lote " + currentBatchNum + "/" + batchTotal + " (" + batchEntries.size() + " textos)",
                             currentBatchNum, batchTotal, stringsTotal,
                             stringsTranslated + stringsFailed, stringsFromCache, stringsFromGlossary, stringsFailed,
-                            tasksTotal, tasksWritten, true, token.isPaused()));
+                            tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), true, token.isPaused()));
 
                     List<String> batchTexts = new ArrayList<>(batchEntries.size());
                     for (Map.Entry<String, MaskedText> be : batchEntries) {
@@ -459,7 +461,7 @@ public final class TranslationService {
                                     + (stringsTranslated + stringsFailed) + "/" + stringsTotal + " strings)",
                             currentBatchNum, batchTotal, stringsTotal,
                             stringsTranslated + stringsFailed, stringsFromCache, stringsFromGlossary, stringsFailed,
-                            tasksTotal, tasksWritten, true, token.isPaused()));
+                            tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), true, token.isPaused()));
                 }
             }
 
@@ -475,7 +477,7 @@ public final class TranslationService {
                         task.displayPath(),
                         batchTotal, batchTotal, stringsTotal,
                         stringsTranslated + stringsFailed, stringsFromCache, stringsFromGlossary, stringsFailed,
-                        tasksTotal, tasksWritten, true, token.isPaused()));
+                        tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), true, token.isPaused()));
 
                 task.writeOutput(src -> resolvedTranslations.getOrDefault(src, src));
                 taskCompleted[tIdx] = true;
@@ -499,7 +501,9 @@ public final class TranslationService {
                     + tasksWritten + " arquivo(s) gravado(s), "
                     + stringsTranslated + " traduzida(s), "
                     + stringsFromCache + " do cache"
-                    + (stringsFailed > 0 ? " (" + stringsFailed + " mantida(s) no original)." : ".");
+                    + (stringsFailed > 0 ? " (" + stringsFailed + " mantida(s) no original)." : ".")
+                    + (tokenUsage.total() > 0 ? " Tokens: " + ProgressSnapshot.formatCount(tokenUsage.input())
+                    + " de entrada + " + ProgressSnapshot.formatCount(tokenUsage.output()) + " de saída." : "");
 
             log(callback, LogLevel.INFO, summary);
             TranslationReport report = new TranslationReport(
@@ -510,7 +514,7 @@ public final class TranslationService {
             updateProgress(callback, new ProgressSnapshot(
                     "Concluído", summary, batchTotal, batchTotal, stringsTotal,
                     stringsTranslated + stringsFailed, stringsFromCache, stringsFromGlossary, stringsFailed,
-                    tasksTotal, tasksWritten, false, false));
+                    tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), false, false));
 
             if (callback != null) {
                 callback.onComplete(report);
@@ -552,7 +556,7 @@ public final class TranslationService {
                     questsChanged, resourcePackChanged, duration);
             updateProgress(callback, new ProgressSnapshot(
                     "Cancelado", msg, 0, 0, 0, stringsTranslated, stringsFromCache, stringsFromGlossary, stringsFailed,
-                    tasksTotal, tasksWritten, false, false));
+                    tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), false, false));
             if (callback != null) {
                 callback.onComplete(report);
             }
@@ -587,7 +591,7 @@ public final class TranslationService {
             log(callback, LogLevel.ERROR, msg);
             updateProgress(callback, new ProgressSnapshot(
                     "Erro", msg, 0, 0, 0, stringsTranslated, stringsFromCache, stringsFromGlossary, stringsFailed,
-                    tasksTotal, tasksWritten, false, false));
+                    tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), false, false));
             if (callback != null) {
                 callback.onError(msg, ex);
             }

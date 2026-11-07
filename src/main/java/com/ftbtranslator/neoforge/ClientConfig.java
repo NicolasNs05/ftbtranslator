@@ -41,6 +41,7 @@ public final class ClientConfig {
     public static final ModConfigSpec.ConfigValue<List<? extends String>> SOURCE_LANGUAGES;
 
     public static final ModConfigSpec.BooleanValue USE_OFFICIAL_GLOSSARY;
+    public static final ModConfigSpec.BooleanValue SHOW_HUD_BAR;
 
     static {
         ModConfigSpec.Builder b = new ModConfigSpec.Builder();
@@ -100,6 +101,11 @@ public final class ClientConfig {
                         o -> o instanceof String s && !s.isBlank());
         b.pop();
 
+        b.comment("Interface").push("interface");
+        SHOW_HUD_BAR = b.comment("Mostrar a barra de progresso da tradução no topo da tela, no estilo da barra de chefe")
+                .define("showHudProgressBar", true);
+        b.pop();
+
         b.comment("Glossário Oficial").push("glossary");
         USE_OFFICIAL_GLOSSARY = b.comment("Reaproveitar as traduções pt_br que os próprios mods já trazem: textos "
                         + "idênticos são resolvidos sem IA e os termos oficiais entram no prompt")
@@ -157,6 +163,18 @@ public final class ClientConfig {
         data.setSourceLanguages(srcLangs);
         data.setUseOfficialGlossary(USE_OFFICIAL_GLOSSARY.get());
         return data;
+    }
+
+    /** Whether the boss-bar style progress bar is drawn on the HUD (true when the config is not loaded yet). */
+    public static boolean showHudBar() {
+        return !SPEC.isLoaded() || SHOW_HUD_BAR.get();
+    }
+
+    public static void setShowHudBar(boolean show) {
+        if (SPEC.isLoaded()) {
+            SHOW_HUD_BAR.set(show);
+            SPEC.save();
+        }
     }
 
     public static void markContextManuallySet() {

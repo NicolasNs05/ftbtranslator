@@ -29,8 +29,15 @@ public final class OpenAiCompatibleClient implements AiTranslationClient {
     private final String model;
     private final String apiKey;
     private final HttpRetryHelper http;
+    private final TokenUsage usage;
 
     public OpenAiCompatibleClient(TranslatorConfigData config, RateLimiter rateLimiter, TranslationCallback callback) {
+        this(config, rateLimiter, callback, new TokenUsage());
+    }
+
+    public OpenAiCompatibleClient(TranslatorConfigData config, RateLimiter rateLimiter, TranslationCallback callback,
+                                  TokenUsage usage) {
+        this.usage = usage;
         this.provider = config.getProvider();
         this.baseUrl = config.effectiveBaseUrl();
         this.model = config.effectiveModel();
@@ -84,6 +91,7 @@ public final class OpenAiCompatibleClient implements AiTranslationClient {
 
         URI uri = buildEndpointUri();
         String responseBody = http.postJson(uri, headers, GSON.toJson(root), token);
+        usage.addOpenAi(responseBody);
         String content = extractMessageContent(responseBody);
         return HttpRetryHelper.parseJsonStringMap(content);
     }

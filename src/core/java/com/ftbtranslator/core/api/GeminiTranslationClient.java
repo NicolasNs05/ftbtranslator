@@ -63,6 +63,8 @@ public final class GeminiTranslationClient implements AiTranslationClient {
     private final int fastPoolSize;
     private final String apiKey;
     private final int requestsPerMinute;
+    private final boolean autoRateLimit;
+    private final TokenUsage usage;
     private final int perModelAttempts;
     private final int perAttemptTimeout;
     private final TranslationCallback callback;
@@ -73,12 +75,20 @@ public final class GeminiTranslationClient implements AiTranslationClient {
     private final AtomicInteger roundRobinCursor = new AtomicInteger(0);
 
     public GeminiTranslationClient(TranslatorConfigData config, RateLimiter sharedLimiter, TranslationCallback callback) {
+        this(config, sharedLimiter, callback, new TokenUsage());
+    }
+
+    public GeminiTranslationClient(TranslatorConfigData config, RateLimiter sharedLimiter, TranslationCallback callback,
+                                   TokenUsage usage) {
+        this.usage = usage;
         this.baseUrl = config.effectiveBaseUrl();
         this.candidateModels = buildCandidateChain(config.getModel());
         boolean userPinnedCustomModel = config.getModel() != null && !config.getModel().isBlank();
         this.fastPoolSize = userPinnedCustomModel ? 1 : Math.min(FAST_POOL_MODELS.size(), candidateModels.size());
         this.apiKey = config.getApiKey() == null ? "" : config.getApiKey().trim();
-        this.requestsPerMinute = config.getRequestsPerMinute();
+        // Gemini quotas are per model, so each model keeps its own limiter (automatic or manual).
+        this.requestsPerMinute = config.effectiveRequestsPerMinute();
+        this.autoRateLimit = config.isAutoRateLimit();
         this.perModelAttempts = Math.min(2, Math.max(1, config.getMaxRetries()));
         this.perAttemptTimeout = Math.min(90, Math.max(25, config.getRequestTimeoutSeconds()));
         this.callback = callback;
@@ -179,6 +189,7 @@ public final class GeminiTranslationClient implements AiTranslationClient {
                         throw firstEx;
                     }
                 }
+                usage.addGemini(responseBody);
                 String modelText = extractCandidateText(responseBody);
                 Map<String, String> parsed = HttpRetryHelper.parseJsonStringMap(modelText);
                 modelCooldownUntilMillis.remove(modelToTry);
@@ -227,7 +238,9 @@ public final class GeminiTranslationClient implements AiTranslationClient {
 
     private HttpRetryHelper httpForModel(String modelName) {
         return perModelHttp.computeIfAbsent(modelName,
-                m -> new HttpRetryHelper(new RateLimiter(requestsPerMinute), perModelAttempts, perAttemptTimeout, callback));
+                m -> new HttpRetryHelper(autoRateLimit
+                        ? new RateLimiter(requestsPerMinute, true, requestsPerMinute * 2)
+                        : new RateLimiter(requestsPerMinute), perModelAttempts, perAttemptTimeout, callback));
     }
 
     private String buildRequestBody(Map<String, String> batch, String systemPrompt,

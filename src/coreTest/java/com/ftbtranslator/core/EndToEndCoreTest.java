@@ -616,6 +616,10 @@ class EndToEndCoreTest {
 
             // Dashboard metrics: the glossary hit is reported separately from cache and AI.
             ProgressSnapshot done = service.latestSnapshot();
+            // Tokens reported by the provider are summed per run (one AI request here: 100 in + 40 out).
+            assertEquals(100L, done.inputTokens());
+            assertEquals(40L, done.outputTokens());
+            assertTrue(report.message().contains("Tokens: 100 de entrada + 40 de saída"), report.message());
             assertEquals(1, done.stringsFromGlossary());
             assertTrue(done.stringsFromCache() >= done.stringsFromGlossary());
             assertEquals(2, done.stringsTranslatedByAi());
@@ -972,6 +976,27 @@ class EndToEndCoreTest {
         assertEquals(15, manual.requestsPerMinute(), "manual mode never changes the player's value");
     }
 
+    @Test
+    void tokenUsageReadsEveryProviderFormat() {
+        com.ftbtranslator.core.api.TokenUsage usage = new com.ftbtranslator.core.api.TokenUsage();
+        usage.addAnthropic("{\"usage\":{\"input_tokens\":1200,\"cache_read_input_tokens\":300,"
+                + "\"cache_creation_input_tokens\":0,\"output_tokens\":450}}");
+        assertEquals(1500L, usage.input());
+        assertEquals(450L, usage.output());
+        usage.addOpenAi("{\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}");
+        usage.addGemini("{\"usageMetadata\":{\"promptTokenCount\":20,\"candidatesTokenCount\":7,"
+                + "\"thoughtsTokenCount\":3}}");
+        assertEquals(1530L, usage.input());
+        assertEquals(465L, usage.output());
+        assertEquals(1995L, usage.total());
+        // Missing or malformed usage never breaks a translation.
+        usage.addOpenAi("{}");
+        usage.addGemini("not json");
+        usage.addAnthropic(null);
+        assertEquals(1995L, usage.total());
+        assertEquals("12.345", ProgressSnapshot.formatCount(12_345L));
+    }
+
     private static TranslatorConfigData mockConfig(HttpServer server) {
         TranslatorConfigData cfg = new TranslatorConfigData();
         cfg.setProvider(ProviderType.OLLAMA);
@@ -1010,6 +1035,10 @@ class EndToEndCoreTest {
             choices.add(choice);
             JsonObject resp = new JsonObject();
             resp.add("choices", choices);
+            JsonObject usage = new JsonObject();
+            usage.addProperty("prompt_tokens", 100);
+            usage.addProperty("completion_tokens", 40);
+            resp.add("usage", usage);
             byte[] bytes = resp.toString().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, bytes.length);

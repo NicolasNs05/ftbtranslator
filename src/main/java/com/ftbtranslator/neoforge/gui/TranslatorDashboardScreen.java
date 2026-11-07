@@ -102,7 +102,6 @@ public final class TranslatorDashboardScreen extends Screen {
     private boolean maskApiKey = true;
     private boolean testingConnection = false;
     private boolean cancelRequested = false;
-    private long confirmResetUntilMillis = 0L;
     private String bannerMessage = "Pronto. Configure sua API Key ou importe um pacote .zip.";
     private int bannerColor = 0xFFE0E0E0;
 
@@ -151,13 +150,11 @@ public final class TranslatorDashboardScreen extends Screen {
 
         resetBtn = this.addRenderableWidget(Button.builder(
                         Component.literal("§c🗑 Resetar Cache e Traduções"),
-                        b -> triggerResetTranslations())
+                        b -> openResetConfirmationScreen())
                 .bounds(left, FOOTER_Y, 185, 20)
                 .build());
-        resetBtn.setTooltip(tip("Apaga o cache de tradução e remove todas as traduções geradas pelo mod "
-                + "(Resource Pack AutoTranslated_Pack_PTBR, FTB Quests, KubeJS e livros do Patchouli), "
-                + "restaurando os arquivos originais e recarregando o jogo. Exige dois cliques para evitar "
-                + "cliques acidentais."));
+        resetBtn.setTooltip(tip("Abre uma tela de confirmação explicando como apagar o cache de tradução "
+                + "e remover todas as traduções geradas pelo mod, restaurando o modpack para o original."));
 
         this.addRenderableWidget(Button.builder(Component.literal("Fechar"), b -> onClose())
                 .bounds(left + PANEL_WIDTH - 82, FOOTER_Y, 82, 20)
@@ -170,7 +167,6 @@ public final class TranslatorDashboardScreen extends Screen {
         if (tab == currentTab) {
             return;
         }
-        confirmResetUntilMillis = 0L;
         currentTab = tab;
         lastTab = tab;
         this.rebuildWidgets();
@@ -689,7 +685,6 @@ public final class TranslatorDashboardScreen extends Screen {
         if (isBusy()) {
             return;
         }
-        confirmResetUntilMillis = 0L;
         persistWorkingConfig();
         testingConnection = true;
         refreshButtonStates();
@@ -712,7 +707,6 @@ public final class TranslatorDashboardScreen extends Screen {
         if (isBusy()) {
             return;
         }
-        confirmResetUntilMillis = 0L;
         persistWorkingConfig();
         String validation = workingConfig.validateForTranslation();
         if (validation != null) {
@@ -769,7 +763,6 @@ public final class TranslatorDashboardScreen extends Screen {
         if (isBusy()) {
             return;
         }
-        confirmResetUntilMillis = 0L;
         try {
             TranslationBundleManager.ExportResult res = FtbTranslatorMod.service()
                     .exportBundle(workingConfig.getTargetLanguage());
@@ -784,7 +777,6 @@ public final class TranslatorDashboardScreen extends Screen {
         if (isBusy()) {
             return;
         }
-        confirmResetUntilMillis = 0L;
         try {
             TranslationBundleManager.ImportResult res = FtbTranslatorMod.service()
                     .importBundle(workingConfig.getTargetLanguage());
@@ -796,19 +788,21 @@ public final class TranslatorDashboardScreen extends Screen {
         }
     }
 
-    private void triggerResetTranslations() {
+    private void openResetConfirmationScreen() {
         if (isBusy()) {
             return;
         }
-        long now = System.currentTimeMillis();
-        if (now > confirmResetUntilMillis) {
-            confirmResetUntilMillis = now + 5_000L;
-            setBanner("⚠ Atenção: clique novamente em 'Confirmar Reset' em até 5s para apagar cache e traduções.",
-                    0xFFFFAA00);
-            refreshButtonStates();
+        persistWorkingConfig();
+        if (this.minecraft != null) {
+            this.minecraft.setScreen(new ResetConfirmScreen(this));
+        }
+    }
+
+    /** Called by {@link ResetConfirmScreen} when the user confirms the reset action. */
+    void performConfirmedReset() {
+        if (isBusy()) {
             return;
         }
-        confirmResetUntilMillis = 0L;
         try {
             TranslationBundleManager.ResetResult res = FtbTranslatorMod.service()
                     .resetAll(workingConfig.getTargetLanguage());
@@ -822,7 +816,6 @@ public final class TranslatorDashboardScreen extends Screen {
         } catch (IOException e) {
             setBanner("Erro ao resetar traduções: " + e.getMessage(), 0xFFFF5555);
         }
-        refreshButtonStates();
     }
 
     public void setBanner(String message, int color) {
@@ -840,13 +833,11 @@ public final class TranslatorDashboardScreen extends Screen {
         boolean running = FtbTranslatorMod.service().isRunning();
         if (!running) {
             cancelRequested = false;
-        } else {
-            confirmResetUntilMillis = 0L;
         }
         boolean paused = FtbTranslatorMod.service().isPaused();
         boolean canEditConfig = !running && !testingConnection;
 
-        for (Button b : new Button[]{contextBtn, ftbQuestsBtn, kubeJsBtn, modsBtn, patchouliBtn, deltaBtn,
+        for (Button b : new Button[]{contextBtn, hudBarBtn, ftbQuestsBtn, kubeJsBtn, modsBtn, patchouliBtn, deltaBtn,
                 providerBtn, guideBtn, toggleMaskBtn, pasteKeyBtn, glossaryBtn, rateModeBtn}) {
             if (b != null) {
                 b.active = canEditConfig;
@@ -911,13 +902,8 @@ public final class TranslatorDashboardScreen extends Screen {
         }
         if (resetBtn != null) {
             resetBtn.active = canEditConfig;
-            boolean confirming = canEditConfig && System.currentTimeMillis() <= confirmResetUntilMillis;
-            if (confirming) {
-                resetBtn.setMessage(Component.literal("§4§l⚠ Clique p/ Confirmar Reset"));
-            } else {
-                resetBtn.setMessage(Component.literal(
-                        canEditConfig ? "§c🗑 Resetar Cache e Traduções" : "🗑 Resetar Cache e Traduções"));
-            }
+            resetBtn.setMessage(Component.literal(
+                    canEditConfig ? "§c🗑 Resetar Cache e Traduções" : "🗑 Resetar Cache e Traduções"));
         }
     }
 

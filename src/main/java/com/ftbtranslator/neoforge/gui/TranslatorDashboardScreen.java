@@ -1,6 +1,8 @@
 package com.ftbtranslator.neoforge.gui;
 
+import com.ftbtranslator.core.ModpackScanSummary;
 import com.ftbtranslator.core.ProgressSnapshot;
+import com.ftbtranslator.core.ProviderType;
 import com.ftbtranslator.core.TranslationScope;
 import com.ftbtranslator.core.TranslatorConfigData;
 import com.ftbtranslator.core.bundle.TranslationBundleManager;
@@ -26,25 +28,25 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Main in-game dashboard ({@code F9} or NeoForge Mods -> Config), organised in four tabs:
+ * Main in-game dashboard ({@code F9}, Pause/Title Screen button, or NeoForge Mods -> Config), organised in four tabs:
  * <ol>
- *   <li><b>Início</b>: API key status, context profile, real-time efficiency metrics (cache / official
- *       glossary vs. AI) and the run controls.</li>
- *   <li><b>Conteúdo e Escopo</b>: translation fronts with plain-language hover tooltips, Delta Translation and
- *       the mod filter with a live counter.</li>
- *   <li><b>Motor de IA & Glossário</b>: provider, API key, connection test, free key guide and the official
- *       glossary switch.</li>
+ *   <li><b>Início</b>: quick-onboarding actions (when API key is missing), context profile, HUD bar toggle,
+ *       real-time efficiency metrics, per-front Modpack X-Ray preview, and the run controls.</li>
+ *   <li><b>Conteúdo e Escopo</b>: translation fronts with plain-language hover tooltips, Delta Translation,
+ *       mod filter with live counter, and custom context prompt editor.</li>
+ *   <li><b>Motor de IA & Glossário</b>: provider, API key, connection test, free key guide, official
+ *       glossary switch, adaptive/manual rate limit, custom model override and Claude effort selector.</li>
  *   <li><b>Pacotes & Comunidade</b>: bundle export/import, exports folder and multiplayer notes.</li>
  * </ol>
- * The progress bar and status line are shown on every tab. All configuration controls and conflicting
- * actions are locked while a translation job (or API connection test) is running.
+ * The progress bar (with active front + live ETA), status line, in-game Translation Editor button, and
+ * Reset button are shown on every tab.
  */
 public final class TranslatorDashboardScreen extends Screen {
 
     private enum Tab {
-        HOME("Início", "Início: status, contexto, métricas e botão de tradução."),
-        CONTENT("Conteúdo", "Conteúdo e Escopo: o que traduzir, Delta Translation e filtro de mods."),
-        ENGINE("IA & Glossário", "Motor de IA & Glossário: provedor, API Key, teste de conexão e glossário oficial."),
+        HOME("Início", "Início: status, Raio-X por frente, métricas, contexto e botão de tradução."),
+        CONTENT("Conteúdo", "Conteúdo e Escopo: o que traduzir, Delta Translation, filtro de mods e prompt customizado."),
+        ENGINE("IA & Glossário", "Motor de IA & Glossário: provedor, API Key, modelo, teste de conexão e glossário oficial."),
         PACKS("Pacotes (.zip)", "Pacotes & Comunidade: exportar e importar traduções prontas, sem API Key.");
 
         final String label;
@@ -70,8 +72,12 @@ public final class TranslatorDashboardScreen extends Screen {
     private Tab currentTab = lastTab;
 
     // Home
+    private Button quickPasteKeyBtn;
+    private Button quickGuideBtn;
+    private Button quickImportBtn;
     private Button contextBtn;
     private Button hudBarBtn;
+    private Button scanPreviewBtn;
     private Button startBtn;
     private Button pauseResumeBtn;
     private Button cancelBtn;
@@ -83,6 +89,8 @@ public final class TranslatorDashboardScreen extends Screen {
     private Button patchouliBtn;
     private Button deltaBtn;
     private EditBox modFilterBox;
+    private Button clearFilterBtn;
+    private EditBox customContextBox;
     // Engine
     private Button providerBtn;
     private Button guideBtn;
@@ -91,23 +99,28 @@ public final class TranslatorDashboardScreen extends Screen {
     private Button pasteKeyBtn;
     private Button testConnBtn;
     private Button glossaryBtn;
+    private EditBox modelBox;
     private Button rateModeBtn;
     private EditBox rateBox;
+    private Button claudeEffortBtn;
     // Packs
     private Button exportZipBtn;
     private Button importZipBtn;
     // Footer
     private Button resetBtn;
+    private Button editorBtn;
 
     private boolean maskApiKey = true;
     private boolean testingConnection = false;
+    private boolean scanningPreview = false;
     private boolean cancelRequested = false;
-    private String bannerMessage = "Pronto. Configure sua API Key ou importe um pacote .zip.";
+    private String bannerMessage = "Pronto. Configure sua API Key, faça um Raio-X ou importe um pacote .zip.";
     private int bannerColor = 0xFFE0E0E0;
 
     /** Mods found in mods/ (loaded once, off the render thread) for the live filter counter. */
     private volatile List<JarModExtractor.ModJarInfo> modJars;
     private boolean modJarsRequested = false;
+    private boolean autoScanRequested = false;
 
     public TranslatorDashboardScreen(Screen parent) {
         super(Component.literal("Universal Modpack & Quests Auto-Translator (PT-BR)"));
@@ -151,14 +164,28 @@ public final class TranslatorDashboardScreen extends Screen {
         resetBtn = this.addRenderableWidget(Button.builder(
                         Component.literal("§c🗑 Resetar Cache e Traduções"),
                         b -> openResetConfirmationScreen())
-                .bounds(left, FOOTER_Y, 185, 20)
+                .bounds(left, FOOTER_Y, 168, 20)
                 .build());
         resetBtn.setTooltip(tip("Abre uma tela de confirmação explicando como apagar o cache de tradução "
                 + "e remover todas as traduções geradas pelo mod, restaurando o modpack para o original."));
 
+        editorBtn = this.addRenderableWidget(Button.builder(
+                        Component.literal("§b✏ Editor de Traduções"),
+                        b -> openTranslationEditorScreen())
+                .bounds(left + 174, FOOTER_Y, 158, 20)
+                .build());
+        editorBtn.setTooltip(tip("Pesquise qualquer texto traduzido (FTB Quests, KubeJS ou Mods) e edite a "
+                + "tradução em português diretamente dentro do jogo."));
+
         this.addRenderableWidget(Button.builder(Component.literal("Fechar"), b -> onClose())
                 .bounds(left + PANEL_WIDTH - 82, FOOTER_Y, 82, 20)
                 .build());
+
+        if (!autoScanRequested && FtbTranslatorMod.service().latestScanSummary() == null
+                && !FtbTranslatorMod.service().isRunning()) {
+            autoScanRequested = true;
+            runScanPreview(true);
+        }
 
         refreshButtonStates();
     }
@@ -173,18 +200,60 @@ public final class TranslatorDashboardScreen extends Screen {
     }
 
     private void clearWidgetRefs() {
-        contextBtn = hudBarBtn = startBtn = pauseResumeBtn = cancelBtn = applyReloadBtn = null;
-        ftbQuestsBtn = kubeJsBtn = modsBtn = patchouliBtn = deltaBtn = null;
-        modFilterBox = null;
-        providerBtn = guideBtn = toggleMaskBtn = pasteKeyBtn = testConnBtn = glossaryBtn = rateModeBtn = null;
-        apiKeyBox = rateBox = null;
+        quickPasteKeyBtn = quickGuideBtn = quickImportBtn = null;
+        contextBtn = hudBarBtn = scanPreviewBtn = startBtn = pauseResumeBtn = cancelBtn = applyReloadBtn = null;
+        ftbQuestsBtn = kubeJsBtn = modsBtn = patchouliBtn = deltaBtn = clearFilterBtn = null;
+        modFilterBox = customContextBox = null;
+        providerBtn = guideBtn = toggleMaskBtn = pasteKeyBtn = testConnBtn = glossaryBtn = rateModeBtn = claudeEffortBtn = null;
+        apiKeyBox = rateBox = modelBox = null;
         exportZipBtn = importZipBtn = null;
-        resetBtn = null;
+        resetBtn = editorBtn = null;
     }
 
     // ------------------------------------------------------------------ tab: Início
 
     private void initHomeTab(int left) {
+        // Quick 1-click onboarding shortcuts right on the Home tab when API Key is missing
+        quickPasteKeyBtn = this.addRenderableWidget(Button.builder(
+                        Component.literal("§a🔑 Colar Key"),
+                        b -> {
+                            if (isBusy()) {
+                                return;
+                            }
+                            String clip = Minecraft.getInstance().keyboardHandler.getClipboard();
+                            if (clip != null && !clip.isBlank()) {
+                                workingConfig.setApiKey(clip.trim());
+                                persistWorkingConfig();
+                                setBanner("API Key colada com sucesso! Clique em '▶ Iniciar Tradução'.", 0xFF55FF55);
+                                refreshButtonStates();
+                            } else {
+                                setBanner("Área de transferência vazia. Copie sua API Key primeiro!", 0xFFFFAA00);
+                            }
+                        })
+                .bounds(left + 210, CONTENT_Y - 2, 68, 16)
+                .build());
+        quickPasteKeyBtn.setTooltip(tip("Cola a API Key diretamente da sua área de transferência sem precisar mudar de aba."));
+
+        quickGuideBtn = this.addRenderableWidget(Button.builder(
+                        Component.literal("§6★ Key Grátis"),
+                        b -> {
+                            if (isBusy() || this.minecraft == null) {
+                                return;
+                            }
+                            persistWorkingConfig();
+                            this.minecraft.setScreen(new ApiKeyGuideScreen(this));
+                        })
+                .bounds(left + 280, CONTENT_Y - 2, 70, 16)
+                .build());
+        quickGuideBtn.setTooltip(tip("Passo a passo de 1 minuto para pegar uma API Key gratuita (Google Gemini ou Groq)."));
+
+        quickImportBtn = this.addRenderableWidget(Button.builder(
+                        Component.literal("§d📦 Importar .zip"),
+                        b -> triggerImportZip())
+                .bounds(left + 352, CONTENT_Y - 2, 68, 16)
+                .build());
+        quickImportBtn.setTooltip(tip("Se um amigo já traduziu o modpack e te mandou o arquivo .zip na pasta exports/, clique aqui para aplicar sem precisar de API Key."));
+
         contextBtn = this.addRenderableWidget(Button.builder(
                         contextButtonLabel(),
                         b -> {
@@ -196,7 +265,7 @@ public final class TranslatorDashboardScreen extends Screen {
                             b.setMessage(contextButtonLabel());
                             persistWorkingConfig();
                         })
-                .bounds(left, CONTENT_Y + 16, 205, 20)
+                .bounds(left, CONTENT_Y + 16, 162, 20)
                 .build());
         contextBtn.setTooltip(tip("Perfil temático da tradução. Ajuda a IA a escolher os termos certos: "
                 + "Tensura (anime Slime), Tech (máquinas e energia), Magia (fantasia) ou Padrão. "
@@ -208,11 +277,19 @@ public final class TranslatorDashboardScreen extends Screen {
                             ClientConfig.setShowHudBar(!ClientConfig.showHudBar());
                             b.setMessage(hudBarLabel());
                         })
-                .bounds(left + 210, CONTENT_Y + 16, 210, 20)
+                .bounds(left + 166, CONTENT_Y + 16, 168, 20)
                 .build());
         hudBarBtn.setTooltip(tip("Mostra o progresso da tradução no topo da tela enquanto você joga, no estilo "
-                + "da barra de chefe (como a do Wither), com os tokens gastos. Some com F1 e enquanto este "
-                + "painel está aberto."));
+                + "da barra de chefe (como a do Wither), com frente ativa, ETA e tokens gastos."));
+
+        scanPreviewBtn = this.addRenderableWidget(Button.builder(
+                        Component.literal("§b🔍 Raio-X"),
+                        b -> runScanPreview(false))
+                .bounds(left + 338, CONTENT_Y + 16, 82, 20)
+                .build());
+        scanPreviewBtn.setTooltip(tip("Analisa o modpack em 1 segundo (sem usar IA e sem gastar tokens) para "
+                + "mostrar quantos textos faltam traduzir em cada frente (Missões, KubeJS, Mods e Livros) e a "
+                + "estimativa de lotes/tokens."));
 
         int rowY = CONTENT_Y + 98;
         startBtn = this.addRenderableWidget(Button.builder(
@@ -221,9 +298,8 @@ public final class TranslatorDashboardScreen extends Screen {
                 .bounds(left, rowY, 108, 20)
                 .build());
         startBtn.setTooltip(tip("Traduz tudo o que estiver marcado na aba Conteúdo. Pode fechar esta tela: "
-                + "a tradução continua em segundo plano e o progresso fica salvo no cache."));
+                + "a tradução continua em segundo plano e o FTB Quests é aplicado automaticamente assim que fica pronto."));
 
-        // Same slot, two jobs: pause/resume while running; after a run with failures, retry only those.
         pauseResumeBtn = this.addRenderableWidget(Button.builder(
                         Component.literal("⏸ Pausar"),
                         b -> {
@@ -237,8 +313,7 @@ public final class TranslatorDashboardScreen extends Screen {
                 .build());
         pauseResumeBtn.setTooltip(tip("Durante a tradução: pausa e retoma. Depois de uma tradução com falhas "
                 + "(textos que ficaram em inglês porque a resposta da IA veio estragada): vira 'Tentar falhas' "
-                + "e reenvia só esses textos; todo o resto vem do cache, sem gastar IA. A lista das falhas fica "
-                + "no log do jogo (logs/latest.log)."));
+                + "e reenvia só esses textos; todo o resto vem do cache, sem gastar IA."));
 
         cancelBtn = this.addRenderableWidget(Button.builder(
                         Component.literal("■ Cancelar Agora"),
@@ -259,61 +334,100 @@ public final class TranslatorDashboardScreen extends Screen {
                         })
                 .bounds(left + 309, rowY, 111, 20)
                 .build());
-        applyReloadBtn.setTooltip(tip("Ativa o pacote de tradução gerado e recarrega os textos do jogo, "
-                + "para ver o resultado sem reiniciar."));
+        applyReloadBtn.setTooltip(tip("Ativa o pacote de tradução gerado e recarrega os textos do jogo e das "
+                + "missões, para ver o resultado sem reiniciar."));
     }
 
     private void renderHomeTab(GuiGraphics g, int left) {
         TranslatorConfigData cfg = workingConfig;
         String keyStatus;
         if (!cfg.getProvider().requiresApiKey()) {
-            keyStatus = "§a✔ " + cfg.getProvider().displayName() + " §7(não precisa de API Key)";
+            keyStatus = "§a✔ " + cfg.getProvider().displayName() + " §7(local, sem API Key)";
         } else if (cfg.getApiKey() == null || cfg.getApiKey().isBlank()) {
-            keyStatus = "§c✘ API Key não configurada §7— abra a aba §fIA & Glossário";
+            keyStatus = "§c✘ Sem API Key §7— use os atalhos ao lado →";
         } else {
-            keyStatus = "§a✔ API Key configurada §7(" + cfg.getProvider().displayName() + ")";
+            keyStatus = "§a✔ API Key pronta §7(" + cfg.getProvider().displayName()
+                    + " · " + cfg.effectiveModel() + ")";
         }
-        g.drawString(this.font, keyStatus, left, CONTENT_Y + 4, 0xFFFFFFFF);
+        g.drawString(this.font, keyStatus, left, CONTENT_Y + 2, 0xFFFFFFFF);
 
-        // Efficiency metrics of the current / last run
+        // Combined Efficiency + Per-Scope X-Ray Card
         ProgressSnapshot snap = FtbTranslatorMod.service().latestSnapshot();
-        int metricsY = CONTENT_Y + 40;
-        g.fill(left, metricsY, left + PANEL_WIDTH, metricsY + 54, 0x80101828);
-        g.renderOutline(left, metricsY, PANEL_WIDTH, 54, 0xFF2A3A5A);
-        g.drawString(this.font, "§7Eficiência da tradução " + (snap.running() ? "atual" : "mais recente") + ":",
-                left + 6, metricsY + 4, 0xFFA0A0A0);
+        ModpackScanSummary xray = FtbTranslatorMod.service().latestScanSummary();
+        int metricsY = CONTENT_Y + 39;
+        g.fill(left, metricsY, left + PANEL_WIDTH, metricsY + 56, 0x80101828);
+        g.renderOutline(left, metricsY, PANEL_WIDTH, 56, 0xFF2A3A5A);
 
         int fromCache = snap.stringsFromCacheOnly();
         int fromGlossary = snap.stringsFromGlossary();
         int byAi = snap.stringsTranslatedByAi();
         int failed = snap.stringsFailed();
+        int runTotal = fromCache + fromGlossary + byAi + failed;
+
+        if (runTotal == 0 && xray != null) {
+            fromCache = xray.resolvedFromCache();
+            fromGlossary = xray.resolvedFromGlossary();
+        }
+
         int colW = PANEL_WIDTH / 4;
-        drawMetric(g, left + 6, metricsY + 16, "Cache", fromCache, 0xFF55FF55);
-        drawMetric(g, left + 6 + colW, metricsY + 16, "Glossário", fromGlossary, 0xFF55FFFF);
-        drawMetric(g, left + 6 + colW * 2, metricsY + 16, "IA", byAi, 0xFFFFFF55);
-        drawMetric(g, left + 6 + colW * 3, metricsY + 16, "Falhas", failed, failed > 0 ? 0xFFFF5555 : 0xFF808080);
+        drawMetric(g, left + 6, metricsY + 4, "Cache", fromCache, 0xFF55FF55);
+        drawMetric(g, left + 6 + colW, metricsY + 4, "Glossário", fromGlossary, 0xFF55FFFF);
+        drawMetric(g, left + 6 + colW * 2, metricsY + 4, "Traduzidos IA", byAi, 0xFFFFFF55);
+        drawMetric(g, left + 6 + colW * 3, metricsY + 4, "Falhas", failed, failed > 0 ? 0xFFFF5555 : 0xFF808080);
 
-        int total = fromCache + fromGlossary + byAi + failed;
-        String saving = total == 0
-                ? "§8Inicie uma tradução para ver quanto foi resolvido sem gastar tokens."
-                : "§7Resolvido sem IA: §a" + Math.round(100.0 * (fromCache + fromGlossary) / total) + "%";
-        g.drawString(this.font, saving, left + 6, metricsY + 28, 0xFFFFFFFF);
+        // Row 2: Raio-X por Frente (FTB Quests | KubeJS | Mods | Patchouli)
+        String xrayLine;
+        if (scanningPreview) {
+            xrayLine = "§e🔍 Escaneando frentes do modpack...";
+        } else if (xray != null) {
+            xrayLine = "§7Pendentes p/ IA — §fQuests: " + formatPending(xray.pendingStringsFor(TranslationScope.FTBQUESTS))
+                    + " §8| §fKubeJS: " + formatPending(xray.pendingStringsFor(TranslationScope.KUBEJS))
+                    + " §8| §fMods: " + formatPending(xray.pendingStringsFor(TranslationScope.MODS))
+                    + " §8| §fLivros: " + formatPending(xray.pendingStringsFor(TranslationScope.PATCHOULI));
+        } else {
+            xrayLine = "§8Clique em '🔍 Raio-X' para ver quantos textos faltam em cada frente.";
+        }
+        g.drawString(this.font, xrayLine, left + 6, metricsY + 18, 0xFFFFFFFF);
 
-        String tokens = snap.totalTokens() == 0
-                ? "§7Tokens: §80 §8(o provedor informa ao responder)"
-                : "§7Tokens: §f" + ProgressSnapshot.formatCount(snap.totalTokens())
-                + " §8(entrada §7" + ProgressSnapshot.formatCount(snap.inputTokens())
-                + "§8 · saída §7" + ProgressSnapshot.formatCount(snap.outputTokens()) + "§8)";
-        g.drawString(this.font, tokens, left + 6, metricsY + 40, 0xFFFFFFFF);
+        // Row 3: Economy % + Estimated or Actual Batches
+        int denom = runTotal > 0 ? runTotal : (xray != null ? xray.totalUniqueStrings() : 0);
+        String saving = denom <= 0
+                ? "§7Economia local (Cache + Glossário): §8aguardando leitura"
+                : "§7Resolvido sem gastar IA: §a" + Math.round(100.0 * (fromCache + fromGlossary) / denom) + "%"
+                + (xray != null && !snap.running()
+                ? " §8· §7Restam §e" + xray.stringsToTranslateWithAi() + " §7templates (§f"
+                + xray.estimatedBatches() + " §7lotes)"
+                : "");
+        g.drawString(this.font, saving, left + 6, metricsY + 31, 0xFFFFFFFF);
+
+        // Row 4: Tokens spent (or estimated before starting)
+        String tokens;
+        if (snap.totalTokens() > 0) {
+            tokens = "§7Tokens gastos: §f" + ProgressSnapshot.formatCount(snap.totalTokens())
+                    + " §8(entrada §7" + ProgressSnapshot.formatCount(snap.inputTokens())
+                    + "§8 · saída §7" + ProgressSnapshot.formatCount(snap.outputTokens()) + "§8)";
+        } else if (xray != null && xray.estimatedTokens() > 0) {
+            tokens = "§7Estimativa p/ o que falta: §e~" + ProgressSnapshot.formatCount(xray.estimatedTokens())
+                    + " tokens §8(varia conforme o modelo escolhido)";
+        } else if (xray != null && xray.stringsToTranslateWithAi() == 0 && xray.totalUniqueStrings() > 0) {
+            tokens = "§a✔ Tudo já está traduzido no cache/glossário! (0 tokens necessários)";
+        } else {
+            tokens = "§7Tokens: §80 (o provedor informa em tempo real durante a tradução)";
+        }
+        g.drawString(this.font, tokens, left + 6, metricsY + 43, 0xFFFFFFFF);
+    }
+
+    private static String formatPending(int count) {
+        return count == 0 ? "§a✔ 0" : "§e" + ProgressSnapshot.formatCount(count);
     }
 
     private static Component hudBarLabel() {
-        return checkboxLabel(ClientConfig.showHudBar(), "Barra de progresso no HUD");
+        return checkboxLabel(ClientConfig.showHudBar(), "Barra no topo (HUD)");
     }
 
     private void drawMetric(GuiGraphics g, int x, int y, String label, int value, int color) {
         g.drawString(this.font, "§7" + label + ": ", x, y, 0xFFFFFFFF);
-        g.drawString(this.font, String.valueOf(value), x + this.font.width(label + ": "), y, color);
+        g.drawString(this.font, ProgressSnapshot.formatCount(value), x + this.font.width(label + ": "), y, color);
     }
 
     // ------------------------------------------------------------------ tab: Conteúdo e Escopo
@@ -321,7 +435,7 @@ public final class TranslatorDashboardScreen extends Screen {
     private void initContentTab(int left) {
         int scopeW = 102;
         int scopeGap = 4;
-        int rowY = CONTENT_Y + 14;
+        int rowY = CONTENT_Y + 12;
         ftbQuestsBtn = scopeButton(TranslationScope.FTBQUESTS, left, rowY, scopeW,
                 "Livro de missões (FTB Quests): títulos, descrições e recompensas das missões do modpack.");
         kubeJsBtn = scopeButton(TranslationScope.KUBEJS, left + (scopeW + scopeGap), rowY, scopeW,
@@ -344,12 +458,12 @@ public final class TranslatorDashboardScreen extends Screen {
                             b.setMessage(deltaLabel());
                             persistWorkingConfig();
                         })
-                .bounds(left, CONTENT_Y + 42, 260, 20)
+                .bounds(left, CONTENT_Y + 38, 260, 20)
                 .build());
         deltaBtn.setTooltip(tip("Delta Translation: quando um mod já vem com tradução em português, "
                 + "traduz só as linhas que faltam e mantém a tradução oficial. Recomendado: ligado."));
 
-        modFilterBox = new EditBox(this.font, left + 82, CONTENT_Y + 74, 200, 20, Component.literal("Filtro Mods"));
+        modFilterBox = new EditBox(this.font, left + 82, CONTENT_Y + 64, 180, 20, Component.literal("Filtro Mods"));
         modFilterBox.setMaxLength(256);
         modFilterBox.setValue(workingConfig.getModFilter());
         modFilterBox.setHint(Component.literal("§8tensura, manas (vazio = todos)"));
@@ -362,6 +476,32 @@ public final class TranslatorDashboardScreen extends Screen {
         modFilterBox.setTooltip(tip("Para traduzir só alguns mods, escreva parte do nome deles separado por "
                 + "vírgula (ex: tensura, manas). Deixe vazio para traduzir todos."));
         this.addRenderableWidget(modFilterBox);
+
+        clearFilterBtn = this.addRenderableWidget(Button.builder(
+                        Component.literal("Limpar"),
+                        b -> {
+                            if (!isBusy() && modFilterBox != null) {
+                                modFilterBox.setValue("");
+                            }
+                        })
+                .bounds(left + 266, CONTENT_Y + 64, 48, 20)
+                .build());
+        clearFilterBtn.setTooltip(tip("Limpa o filtro para selecionar todos os mods instalados novamente."));
+
+        customContextBox = new EditBox(this.font, left + 118, CONTENT_Y + 90, 302, 20,
+                Component.literal("Contexto Personalizado"));
+        customContextBox.setMaxLength(500);
+        customContextBox.setValue(workingConfig.getCustomContext());
+        customContextBox.setHint(Component.literal("§8Instruções extras p/ a IA (usado no Contexto: Personalizado)"));
+        customContextBox.setResponder(val -> {
+            if (!isBusy()) {
+                workingConfig.setCustomContext(val);
+                persistWorkingConfig();
+            }
+        });
+        customContextBox.setTooltip(tip("Quando você escolhe 'Contexto: Personalizado' na aba Início, a IA segue "
+                + "exatamente as instruções de estilo/universo que você digitar aqui."));
+        this.addRenderableWidget(customContextBox);
 
         requestModJarsOnce();
     }
@@ -378,19 +518,21 @@ public final class TranslatorDashboardScreen extends Screen {
 
     private void renderContentTab(GuiGraphics g, int left) {
         g.drawString(this.font, "§7O que traduzir §8(passe o mouse sobre cada opção para entender):",
-                left, CONTENT_Y + 2, 0xFFA0A0A0);
-        g.drawString(this.font, "§fFiltro de mods:", left, CONTENT_Y + 80, 0xFFE0E0E0);
+                left, CONTENT_Y + 1, 0xFFA0A0A0);
+        g.drawString(this.font, "§fFiltro de mods:", left, CONTENT_Y + 70, 0xFFE0E0E0);
 
         List<JarModExtractor.ModJarInfo> jars = modJars;
         String counter;
         if (jars == null) {
-            counter = "§8contando mods...";
+            counter = "§8contando...";
         } else {
             int matching = JarModExtractor.countMatchingJars(jars, workingConfig.modFilterTokens());
             String color = matching == 0 ? "§c" : (matching == jars.size() ? "§a" : "§e");
             counter = color + matching + " §7de §f" + jars.size() + " §7mods";
         }
-        g.drawString(this.font, counter, left + 290, CONTENT_Y + 80, 0xFFFFFFFF);
+        g.drawString(this.font, counter, left + 320, CONTENT_Y + 70, 0xFFFFFFFF);
+
+        g.drawString(this.font, "§fPrompt customizado:", left, CONTENT_Y + 96, 0xFFE0E0E0);
     }
 
     private void requestModJarsOnce() {
@@ -412,7 +554,7 @@ public final class TranslatorDashboardScreen extends Screen {
     // ------------------------------------------------------------------ tab: Motor de IA & Glossário
 
     private void initEngineTab(int left) {
-        int row1Y = CONTENT_Y + 14;
+        int row1Y = CONTENT_Y + 12;
         providerBtn = this.addRenderableWidget(Button.builder(
                         providerButtonLabel(),
                         b -> {
@@ -422,6 +564,7 @@ public final class TranslatorDashboardScreen extends Screen {
                             workingConfig.setProvider(workingConfig.getProvider().next());
                             b.setMessage(providerButtonLabel());
                             persistWorkingConfig();
+                            refreshButtonStates();
                         })
                 .bounds(left, row1Y, 205, 20)
                 .build());
@@ -443,7 +586,7 @@ public final class TranslatorDashboardScreen extends Screen {
                 .bounds(left + 210, row1Y, 210, 20)
                 .build());
 
-        int row2Y = CONTENT_Y + 38;
+        int row2Y = CONTENT_Y + 36;
         apiKeyBox = new EditBox(this.font, left + 54, row2Y, 178, 20, Component.literal("API Key"));
         apiKeyBox.setMaxLength(512);
         apiKeyBox.setValue(workingConfig.getApiKey());
@@ -494,6 +637,7 @@ public final class TranslatorDashboardScreen extends Screen {
                 .build());
         testConnBtn.setTooltip(tip("Faz uma chamada rápida para confirmar que a chave e o provedor funcionam."));
 
+        int row3Y = CONTENT_Y + 62;
         glossaryBtn = this.addRenderableWidget(Button.builder(
                         glossaryLabel(),
                         b -> {
@@ -504,16 +648,31 @@ public final class TranslatorDashboardScreen extends Screen {
                             b.setMessage(glossaryLabel());
                             persistWorkingConfig();
                         })
-                .bounds(left, CONTENT_Y + 72, 260, 20)
+                .bounds(left, row3Y, 215, 20)
                 .build());
         glossaryBtn.setTooltip(tip("Muitos mods já vêm com tradução em português feita por pessoas. "
                 + "Com o glossário ligado, textos iguais são traduzidos na hora sem gastar a IA, e os "
                 + "termos oficiais são ensinados à IA para manter tudo consistente. Recomendado: ligado."));
 
+        modelBox = new EditBox(this.font, left + 266, row3Y, 154, 20, Component.literal("Modelo"));
+        modelBox.setMaxLength(128);
+        modelBox.setValue(workingConfig.getModel());
+        modelBox.setHint(Component.literal("§8Auto (" + workingConfig.getProvider().defaultModel() + ")"));
+        modelBox.setResponder(val -> {
+            if (!isBusy()) {
+                workingConfig.setModel(val);
+                persistWorkingConfig();
+            }
+        });
+        modelBox.setTooltip(tip("Deixe vazio para usar o modelo automático recomendado do provedor "
+                + "(no Gemini, vazio ativa o rodízio automático entre os modelos Flash para maior velocidade). "
+                + "Ou digite um modelo específico se preferir."));
+        this.addRenderableWidget(modelBox);
+
+        int row4Y = CONTENT_Y + 88;
         String rateHelp = "Quantos pedidos por minuto o mod pode enviar para a IA (cada pedido leva um lote "
                 + "de dezenas de textos). Todo provedor tem um limite por conta: passar dele não quebra nada, "
-                + "a IA só pede para esperar (erro 429) e o mod aguarda e tenta de novo sozinho, mas a "
-                + "tradução fica mais lenta.";
+                + "a IA só pede para esperar (erro 429) e o mod aguarda e tenta de novo sozinho.";
         rateModeBtn = this.addRenderableWidget(Button.builder(
                         rateModeLabel(),
                         b -> {
@@ -525,13 +684,12 @@ public final class TranslatorDashboardScreen extends Screen {
                             persistWorkingConfig();
                             refreshButtonStates();
                         })
-                .bounds(left, CONTENT_Y + 96, 150, 20)
+                .bounds(left, row4Y, 142, 20)
                 .build());
-        rateModeBtn.setTooltip(tip(rateHelp + " Automático (recomendado): começa no limite típico de uma conta "
-                + "inicial do provedor, sobe aos poucos enquanto não há erros e cai pela metade quando a IA "
-                + "pede para esperar. Manual: usa sempre o número que você digitar ao lado."));
+        rateModeBtn.setTooltip(tip(rateHelp + " Automático (recomendado): ajusta sozinho à sua conta. "
+                + "Manual: usa o valor fixo ao lado."));
 
-        rateBox = new EditBox(this.font, left + 156, CONTENT_Y + 96, 40, 20, Component.literal("req/min"));
+        rateBox = new EditBox(this.font, left + 146, row4Y, 38, 20, Component.literal("req/min"));
         rateBox.setMaxLength(3);
         rateBox.setFilter(s -> s.matches("\\d{0,3}"));
         rateBox.setValue(String.valueOf(workingConfig.getRequestsPerMinute()));
@@ -543,10 +701,33 @@ public final class TranslatorDashboardScreen extends Screen {
             workingConfig.setRequestsPerMinute(rpm);
             persistWorkingConfig();
         });
-        rateBox.setTooltip(tip(rateHelp + " Digite de 1 a 600 (só vale no modo Manual). Na dúvida, use o "
-                + "limite da sua conta que aparece no site do provedor; se aparecerem muitos avisos de "
-                + "espera, diminua."));
+        rateBox.setTooltip(tip(rateHelp + " Digite de 1 a 600 (só vale no modo Manual)."));
         this.addRenderableWidget(rateBox);
+
+        claudeEffortBtn = this.addRenderableWidget(Button.builder(
+                        claudeEffortLabel(),
+                        b -> {
+                            if (isBusy()) {
+                                return;
+                            }
+                            workingConfig.setClaudeEffort(nextClaudeEffort(workingConfig.getClaudeEffort()));
+                            b.setMessage(claudeEffortLabel());
+                            persistWorkingConfig();
+                        })
+                .bounds(left + 266, row4Y, 154, 20)
+                .build());
+        claudeEffortBtn.setTooltip(tip("Exclusivo do provedor Claude (Anthropic): controla quanto o modelo raciocina "
+                + "antes de responder. 'low' gasta menos tokens e é mais rápido; 'medium' é o equilíbrio padrão."));
+    }
+
+    private static String nextClaudeEffort(String current) {
+        List<String> levels = List.of("low", "medium", "high");
+        int idx = levels.indexOf(current == null ? "medium" : current.toLowerCase());
+        return levels.get((idx + 1) % levels.size());
+    }
+
+    private Component claudeEffortLabel() {
+        return Component.literal("Esforço Claude: §e" + workingConfig.getClaudeEffort());
     }
 
     private Component rateModeLabel() {
@@ -554,16 +735,10 @@ public final class TranslatorDashboardScreen extends Screen {
     }
 
     private void renderEngineTab(GuiGraphics g, int left) {
-        g.drawString(this.font, "§7Provedor de IA e chave de acesso:", left, CONTENT_Y + 2, 0xFFA0A0A0);
-        g.drawString(this.font, "§fAPI Key:", left, CONTENT_Y + 44, 0xFFE0E0E0);
-        g.drawString(this.font, "§7Glossário oficial dos mods:", left, CONTENT_Y + 62, 0xFFA0A0A0);
-        g.drawString(this.font, "§8Modelo: §7" + workingConfig.effectiveModel(), left + 230, CONTENT_Y + 62,
-                0xFF909090);
-        g.drawString(this.font, "§7req/min", left + 200, CONTENT_Y + 102, 0xFFA0A0A0);
-        String rateInfo = workingConfig.isAutoRateLimit()
-                ? "§8começa em §7" + workingConfig.effectiveRequestsPerMinute() + "§8, ajusta à conta"
-                : "§8valor fixo definido por você";
-        g.drawString(this.font, rateInfo, left + 246, CONTENT_Y + 102, 0xFF909090);
+        g.drawString(this.font, "§7Provedor de IA, chave e modelo:", left, CONTENT_Y + 1, 0xFFA0A0A0);
+        g.drawString(this.font, "§fAPI Key:", left, CONTENT_Y + 42, 0xFFE0E0E0);
+        g.drawString(this.font, "§fModelo:", left + 222, CONTENT_Y + 68, 0xFFE0E0E0);
+        g.drawString(this.font, "§7req/min", left + 188, CONTENT_Y + 94, 0xFFA0A0A0);
     }
 
     // ------------------------------------------------------------------ tab: Pacotes & Comunidade
@@ -626,7 +801,7 @@ public final class TranslatorDashboardScreen extends Screen {
     }
 
     private boolean isBusy() {
-        return FtbTranslatorMod.service().isRunning() || testingConnection;
+        return FtbTranslatorMod.service().isRunning() || testingConnection || scanningPreview;
     }
 
     private void applyKeyMaskFormatter() {
@@ -673,6 +848,7 @@ public final class TranslatorDashboardScreen extends Screen {
         workingConfig.setScopeEnabled(scope, !workingConfig.isScopeEnabled(scope));
         btn.setMessage(scopeLabel(scope));
         persistWorkingConfig();
+        runScanPreview(true);
     }
 
     private void persistWorkingConfig() {
@@ -680,6 +856,37 @@ public final class TranslatorDashboardScreen extends Screen {
     }
 
     // ------------------------------------------------------------------ actions
+
+    private void runScanPreview(boolean silent) {
+        if (isBusy()) {
+            return;
+        }
+        persistWorkingConfig();
+        scanningPreview = true;
+        refreshButtonStates();
+        if (!silent) {
+            setBanner("Analisando arquivos e cache do modpack (Raio-X sem gastar IA)...", 0xFFFFFF55);
+        }
+        FtbTranslatorMod.service().scanPreviewAsync(
+                workingConfig,
+                summary -> Minecraft.getInstance().execute(() -> {
+                    scanningPreview = false;
+                    if (!silent) {
+                        setBanner("Raio-X concluído: " + summary.stringsToTranslateWithAi()
+                                + " texto(s) pendente(s) em " + summary.estimatedBatches()
+                                + " lote(s) (~" + ProgressSnapshot.formatCount(summary.estimatedTokens())
+                                + " tokens).", 0xFF55FFFF);
+                    }
+                    refreshButtonStates();
+                }),
+                errMsg -> Minecraft.getInstance().execute(() -> {
+                    scanningPreview = false;
+                    if (!silent) {
+                        setBanner("Falha ao escanear modpack: " + errMsg, 0xFFFF5555);
+                    }
+                    refreshButtonStates();
+                }));
+    }
 
     private void runConnectionTest() {
         if (isBusy()) {
@@ -719,10 +926,6 @@ public final class TranslatorDashboardScreen extends Screen {
         refreshButtonStates();
     }
 
-    /**
-     * Starts a normal run: rejected texts were not cached and Delta Translation no longer treats them as
-     * translated, so only they reach the AI while everything else resolves from the cache.
-     */
     private void triggerRetryFailures() {
         if (isBusy()) {
             return;
@@ -783,6 +986,7 @@ public final class TranslatorDashboardScreen extends Screen {
             ResourcePackApplier.applyOnMainThread(FtbTranslatorMod.service().paths(), res.questsTouched());
             setBanner("Importado " + res.filesExtracted() + " arquivo(s) de "
                     + res.zipPath().getFileName() + " e aplicado!", 0xFF55FF55);
+            runScanPreview(true);
         } catch (IOException e) {
             setBanner("Erro ao importar: " + e.getMessage(), 0xFFFF5555);
         }
@@ -795,6 +999,16 @@ public final class TranslatorDashboardScreen extends Screen {
         persistWorkingConfig();
         if (this.minecraft != null) {
             this.minecraft.setScreen(new ResetConfirmScreen(this));
+        }
+    }
+
+    private void openTranslationEditorScreen() {
+        if (isBusy()) {
+            return;
+        }
+        persistWorkingConfig();
+        if (this.minecraft != null) {
+            this.minecraft.setScreen(new TranslationEditorScreen(this, workingConfig));
         }
     }
 
@@ -813,6 +1027,7 @@ public final class TranslatorDashboardScreen extends Screen {
                     : ".")
                     + " Recursos recarregados!";
             setBanner(msg, 0xFF55FF55);
+            runScanPreview(true);
         } catch (IOException e) {
             setBanner("Erro ao resetar traduções: " + e.getMessage(), 0xFFFF5555);
         }
@@ -835,15 +1050,29 @@ public final class TranslatorDashboardScreen extends Screen {
             cancelRequested = false;
         }
         boolean paused = FtbTranslatorMod.service().isPaused();
-        boolean canEditConfig = !running && !testingConnection;
+        boolean canEditConfig = !running && !testingConnection && !scanningPreview;
 
-        for (Button b : new Button[]{contextBtn, hudBarBtn, ftbQuestsBtn, kubeJsBtn, modsBtn, patchouliBtn, deltaBtn,
-                providerBtn, guideBtn, toggleMaskBtn, pasteKeyBtn, glossaryBtn, rateModeBtn}) {
+        boolean missingApiKey = workingConfig.getProvider().requiresApiKey()
+                && (workingConfig.getApiKey() == null || workingConfig.getApiKey().isBlank());
+        for (Button qb : new Button[]{quickPasteKeyBtn, quickGuideBtn, quickImportBtn}) {
+            if (qb != null) {
+                qb.visible = missingApiKey;
+                qb.active = missingApiKey && canEditConfig;
+            }
+        }
+
+        for (Button b : new Button[]{contextBtn, hudBarBtn, ftbQuestsBtn, kubeJsBtn, modsBtn, patchouliBtn,
+                deltaBtn, clearFilterBtn, providerBtn, guideBtn, toggleMaskBtn, pasteKeyBtn, glossaryBtn,
+                rateModeBtn}) {
             if (b != null) {
                 b.active = canEditConfig;
             }
         }
-        for (EditBox box : new EditBox[]{apiKeyBox, modFilterBox}) {
+        if (scanPreviewBtn != null) {
+            scanPreviewBtn.active = canEditConfig;
+            scanPreviewBtn.setMessage(Component.literal(scanningPreview ? "Lendo..." : "§b🔍 Raio-X"));
+        }
+        for (EditBox box : new EditBox[]{apiKeyBox, modFilterBox, customContextBox, modelBox}) {
             if (box != null) {
                 box.setEditable(canEditConfig);
                 box.active = canEditConfig;
@@ -851,6 +1080,14 @@ public final class TranslatorDashboardScreen extends Screen {
                     box.setFocused(false);
                 }
             }
+        }
+        if (modelBox != null) {
+            modelBox.setHint(Component.literal("§8Auto (" + workingConfig.getProvider().defaultModel() + ")"));
+        }
+        if (claudeEffortBtn != null) {
+            boolean isClaude = workingConfig.getProvider() == ProviderType.CLAUDE;
+            claudeEffortBtn.active = canEditConfig && isClaude;
+            claudeEffortBtn.setMessage(claudeEffortLabel());
         }
         if (rateBox != null) {
             boolean editable = canEditConfig && !workingConfig.isAutoRateLimit();
@@ -905,6 +1142,11 @@ public final class TranslatorDashboardScreen extends Screen {
             resetBtn.setMessage(Component.literal(
                     canEditConfig ? "§c🗑 Resetar Cache e Traduções" : "🗑 Resetar Cache e Traduções"));
         }
+        if (editorBtn != null) {
+            editorBtn.active = canEditConfig;
+            editorBtn.setMessage(Component.literal(
+                    canEditConfig ? "§b✏ Editor de Traduções" : "✏ Editor de Traduções"));
+        }
     }
 
     // ------------------------------------------------------------------ render
@@ -938,14 +1180,12 @@ public final class TranslatorDashboardScreen extends Screen {
         g.fill(barX, BAR_Y, barX + barW, BAR_Y + barH, 0xFF1A1F2C);
         int filledW = (int) Math.round(barW * snap.fraction());
         if (snap.running() && filledW < 6) {
-            // Minimum visible bar indicator as soon as a run is active
             filledW = 6;
         }
         if (filledW > 0) {
             int barColor = snap.paused() ? 0xFFD99B26 : (snap.running() ? 0xFF2EA043 : 0xFF388BFD);
             g.fill(barX, BAR_Y, barX + Math.min(barW, filledW), BAR_Y + barH, barColor);
         }
-        // Animated activity pulse when actively translating a batch
         if (snap.running() && !snap.paused()) {
             int pulseW = 36;
             int cycle = (int) ((System.currentTimeMillis() / 12L) % (barW + pulseW)) - pulseW;
@@ -958,9 +1198,11 @@ public final class TranslatorDashboardScreen extends Screen {
         g.renderOutline(barX, BAR_Y, barW, barH, 0xFF4A5A80);
 
         int pct = (int) Math.round(snap.fraction() * 100.0);
+        String etaSuffix = snap.formattedEta().isEmpty() ? "" : " | ETA " + snap.formattedEta();
         String barText = snap.phase() + " — " + pct + "% | Lote "
                 + snap.batchIndex() + "/" + snap.batchTotal()
-                + " | Gravados: " + snap.tasksWritten() + "/" + snap.tasksTotal();
+                + " | Arq: " + snap.tasksWritten() + "/" + snap.tasksTotal()
+                + etaSuffix;
         g.drawCenteredString(this.font, barText, centerX, BAR_Y + 3, 0xFFFFFFFF);
 
         String itemLine = snap.running() && !snap.currentItem().isEmpty()

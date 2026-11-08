@@ -16,6 +16,7 @@ import net.neoforged.neoforge.client.event.CustomizeGuiOverlayEvent;
  * <ul>
  *   <li>purple while translating, yellow while paused;</li>
  *   <li>green for a few seconds after the run completes, red when it was cancelled or failed;</li>
+ *   <li>above the bar: active translation front, percentage, batch counter and live ETA;</li>
  *   <li>below the bar: tokens used so far and texts translated by the AI.</li>
  * </ul>
  * It sits under any real boss bars on screen, hides with F1, while the dashboard is open (which has its own
@@ -82,13 +83,19 @@ public final class TranslationHudOverlay {
         Color color;
         double fraction = snap.fraction();
         int pct = (int) Math.round(fraction * 100.0);
+        String scopeTag = snap.currentScope() != null && !snap.currentScope().isBlank()
+                ? " [" + snap.currentScope() + "]"
+                : "";
+        String etaTag = snap.formattedEta().isEmpty() ? "" : " · " + snap.formattedEta();
+
         if (snap.running()) {
             if (snap.paused()) {
-                title = "Tradução pausada: " + pct + "%";
+                title = "Tradução pausada" + scopeTag + ": " + pct + "%";
                 color = Color.YELLOW;
             } else {
-                title = "Traduzindo modpack: " + pct + "%"
-                        + (snap.batchTotal() > 0 ? " · Lote " + snap.batchIndex() + "/" + snap.batchTotal() : "");
+                title = "Traduzindo" + scopeTag + ": " + pct + "%"
+                        + (snap.batchTotal() > 0 ? " · Lote " + snap.batchIndex() + "/" + snap.batchTotal() : "")
+                        + etaTag;
                 color = Color.PURPLE;
             }
         } else if ("Concluído".equals(snap.phase())) {
@@ -112,7 +119,8 @@ public final class TranslationHudOverlay {
         }
 
         String detail = "§7Tokens: §f" + ProgressSnapshot.formatCount(snap.totalTokens())
-                + " §8| §7IA: §f" + ProgressSnapshot.formatCount(snap.stringsTranslatedByAi()) + " §7textos";
+                + " §8| §7IA: §f" + ProgressSnapshot.formatCount(snap.stringsTranslatedByAi())
+                + " §8| §7Arquivos: §f" + snap.tasksWritten() + "/" + snap.tasksTotal();
         g.drawString(font, detail, g.guiWidth() / 2 - font.width(detail) / 2, y + BAR_HEIGHT + 2, 0xFFFFFFFF);
     }
 }

@@ -1489,6 +1489,117 @@ class EndToEndCoreTest {
         assertEquals("{\"name\":\"Original Book\"}", Files.readString(rootBookJson, StandardCharsets.UTF_8));
     }
 
+    @Test
+    void scanPreviewAndInGameOverrideEditorPersistToFilesAndCache(@TempDir Path tempRoot) throws Exception {
+        Path instance = tempRoot.resolve("instance");
+        Path questsLangDir = instance.resolve("config/ftbquests/quests/lang");
+        Files.createDirectories(questsLangDir);
+        Files.writeString(questsLangDir.resolve("en_us.snbt"), """
+                {
+                    quest.slime.title: "Slime Evolution"
+                    quest.slime.desc: "Absorb %s Magicules"
+                }
+                """, StandardCharsets.UTF_8);
+
+        Path kubeLangDir = instance.resolve("kubejs/assets/kubejs/lang");
+        Files.createDirectories(kubeLangDir);
+        Files.writeString(kubeLangDir.resolve("en_us.json"), """
+                {
+                  "item.kubejs.hipokute": "Hipokute Herb"
+                }
+                """, StandardCharsets.UTF_8);
+
+        TranslationService service = new TranslationService(instance);
+        TranslatorConfigData cfg = new TranslatorConfigData();
+
+        // 1. Modpack X-Ray dry-run scan counts pending strings, batches, and tokens without calling any HTTP server
+        ModpackScanSummary scanBefore = service.scanPreviewSynchronously(cfg);
+        assertEquals(2, scanBefore.totalFiles());
+        assertEquals(3, scanBefore.stringsToTranslateWithAi());
+        assertEquals(2, scanBefore.pendingStringsFor(TranslationScope.FTBQUESTS));
+        assertEquals(1, scanBefore.pendingStringsFor(TranslationScope.KUBEJS));
+        assertTrue(scanBefore.estimatedBatches() >= 1);
+        assertTrue(scanBefore.estimatedTokens() > 0);
+
+        // 2. Run actual translation with mock server and verify partial checkpoint notification fires for FTB Quests
+        boolean[] questsCheckpointFired = {false};
+        HttpServer server = mockOpenAiServer(
+                Collections.synchronizedList(new ArrayList<>()),
+                Collections.synchronizedList(new ArrayList<>()),
+                null);
+        server.start();
+        try {
+            TranslatorConfigData runCfg = mockConfig(server);
+            runCfg.setBatchSize(2); // Batch 1 translates the 2 FTB Quests strings; Batch 2 translates KubeJS
+            TranslationCallback cb = new TranslationCallback() {
+                @Override
+                public void onProgress(ProgressSnapshot snapshot) {
+                }
+
+                @Override
+                public void onLog(LogLevel level, String message) {
+                }
+
+                @Override
+                public void onComplete(TranslationReport report) {
+                }
+
+                @Override
+                public void onError(String message, Throwable cause) {
+                }
+
+                @Override
+                public void onPartialCheckpoint(boolean questsUpdated, boolean resourcePackUpdated) {
+                    if (questsUpdated) {
+                        questsCheckpointFired[0] = true;
+                    }
+                }
+            };
+            assertTrue(service.runSynchronously(
+                    runCfg, EnumSet.of(TranslationScope.FTBQUESTS, TranslationScope.KUBEJS), cb).success());
+            assertTrue(questsCheckpointFired[0], "FTB Quests completion must trigger mid-run partial checkpoint");
+        } finally {
+            server.stop(0);
+        }
+
+        // 3. Dry-run scan after translation shows 0 pending AI strings (FTB Quests 2 strings served from cache, KubeJS skipped by Delta)
+        ModpackScanSummary scanAfter = service.scanPreviewSynchronously(cfg);
+        assertEquals(0, scanAfter.stringsToTranslateWithAi());
+        assertEquals(2, scanAfter.resolvedFromCache());
+
+        // 4. In-Game Translation Override Editor loads all 3 entries and persists edits to both disk and cache
+        List<com.ftbtranslator.core.editor.TranslationOverrideManager.EditableEntry> entries =
+                com.ftbtranslator.core.editor.TranslationOverrideManager.loadAllEntries(service.paths(), "pt_br");
+        assertEquals(3, entries.size());
+
+        com.ftbtranslator.core.editor.TranslationOverrideManager.EditableEntry slimeDesc = entries.stream()
+                .filter(e -> e.originalText().equals("Absorb %s Magicules"))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("[PT-BR] Absorb %s Magicules", slimeDesc.translatedText());
+
+        com.ftbtranslator.core.editor.TranslationOverrideManager.saveOverride(
+                service.paths(), cfg, slimeDesc, "Absorva %s Magículas");
+
+        com.ftbtranslator.core.editor.TranslationOverrideManager.EditableEntry hipokute = entries.stream()
+                .filter(e -> e.keyOrIndex().equals("item.kubejs.hipokute"))
+                .findFirst()
+                .orElseThrow();
+        com.ftbtranslator.core.editor.TranslationOverrideManager.saveOverride(
+                service.paths(), cfg, hipokute, "Erva Hipokute");
+
+        String updatedSnbt = Files.readString(questsLangDir.resolve("pt_br.snbt"), StandardCharsets.UTF_8);
+        assertTrue(updatedSnbt.contains("\"Absorva %s Magículas\""), updatedSnbt);
+
+        String updatedJson = Files.readString(kubeLangDir.resolve("pt_br.json"), StandardCharsets.UTF_8);
+        assertTrue(updatedJson.contains("\"Erva Hipokute\""), updatedJson);
+
+        TranslationCache reloadedCache = new TranslationCache(service.paths().cacheFile("pt_br"));
+        reloadedCache.load();
+        assertEquals("Absorva %s Magículas", reloadedCache.resolve("Absorb %s Magicules", new TokenMasker()));
+        assertEquals("Erva Hipokute", reloadedCache.resolve("Hipokute Herb", new TokenMasker()));
+    }
+
     private static TranslatorConfigData mockConfig(HttpServer server) {
         TranslatorConfigData cfg = new TranslatorConfigData();
         cfg.setProvider(ProviderType.OLLAMA);

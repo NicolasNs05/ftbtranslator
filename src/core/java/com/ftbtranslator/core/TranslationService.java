@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -34,8 +35,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
- * Central orchestrator of the 5 translation fronts, caching, batching, token masking, connection tests
- * and bundle import/export.
+ * Central orchestrator of the 5 translation fronts, caching, batching, token masking, connection tests,
+ * dry-run X-Ray scanning and bundle import/export/reset.
  * <p>
  * Optimizations included:
  * <ul>
@@ -44,7 +45,8 @@ import java.util.function.Consumer;
  *       {@code en_us.json} strings instead of translating the same mod twice.</li>
  *   <li>Adaptive batch sizing: packs up to {@code 80} short item/skill names per batch (cutting system-prompt
  *       token overhead and HTTP calls in half) while keeping long Patchouli book pages in smaller batches.</li>
- *   <li>Incremental file flushing after every batch.</li>
+ *   <li>Incremental file flushing after every batch, plus partial FTB Quests flushing every 5 batches and
+ *       immediate in-world quest reload as soon as the FTB Quests front completes.</li>
  * </ul>
  */
 public final class TranslationService {
@@ -54,6 +56,8 @@ public final class TranslationService {
     static final int MAX_LOGGED_FAILURES = 50;
     /** Maximum glossary terms injected into the system prompt of a single batch. */
     static final int MAX_GLOSSARY_TERMS_PER_BATCH = 25;
+    /** Interval of batches between partial FTB Quests file flushes so players see quest progress early. */
+    private static final int QUESTS_PARTIAL_FLUSH_BATCH_INTERVAL = 5;
 
     private final GamePaths paths;
     private final TokenMasker tokenMasker = new TokenMasker();
@@ -66,6 +70,7 @@ public final class TranslationService {
     private final AtomicReference<CancellationToken> activeToken = new AtomicReference<>();
     private final AtomicReference<TranslationCache> activeCache = new AtomicReference<>();
     private volatile ProgressSnapshot latestSnapshot = ProgressSnapshot.idle();
+    private volatile ModpackScanSummary latestScanSummary;
 
     public TranslationService(Path gameDir) {
         this.paths = new GamePaths(gameDir);
@@ -77,6 +82,10 @@ public final class TranslationService {
 
     public ProgressSnapshot latestSnapshot() {
         return latestSnapshot;
+    }
+
+    public ModpackScanSummary latestScanSummary() {
+        return latestScanSummary;
     }
 
     public boolean isRunning() {
@@ -122,6 +131,146 @@ public final class TranslationService {
         token.setPaused(false);
         token.cancel();
         return true;
+    }
+
+    /**
+     * Performs a fast dry-run X-Ray scan of the modpack without calling any AI API or spending tokens,
+     * returning the breakdown of files and pending strings per front, cache/glossary hits, and estimated
+     * batches and tokens.
+     */
+    public ModpackScanSummary scanPreviewSynchronously(TranslatorConfigData config) throws IOException {
+        TranslatorConfigData snapshotConfig = config.copy();
+        Set<TranslationScope> scopes = EnumSet.noneOf(TranslationScope.class);
+        for (TranslationScope s : TranslationScope.values()) {
+            if (snapshotConfig.isScopeEnabled(s)) {
+                scopes.add(s);
+            }
+        }
+
+        TranslationCache cache = new TranslationCache(
+                paths.cacheFile(snapshotConfig.getTargetLanguage()),
+                snapshotConfig.getContextPreset(),
+                snapshotConfig.getCustomContext());
+        cache.load();
+
+        TranslationGlossary glossary = new TranslationGlossary();
+        Map<String, JarModExtractor.NamespaceLangAccumulator> jarIndex = Map.of();
+        if (snapshotConfig.isUseOfficialGlossary()
+                || scopes.contains(TranslationScope.MODS)
+                || scopes.contains(TranslationScope.KUBEJS)) {
+            jarIndex = JarModExtractor.indexModJars(
+                    paths, snapshotConfig, snapshotConfig.isUseOfficialGlossary() ? glossary : null, null);
+        }
+
+        List<PendingOutputTask> tasks = new ArrayList<>();
+        if (scopes.contains(TranslationScope.FTBQUESTS)) {
+            tasks.addAll(FtbQuestsTranslator.scan(paths, snapshotConfig, null));
+        }
+        if (scopes.contains(TranslationScope.KUBEJS)) {
+            tasks.addAll(KubeJsTranslator.scan(paths, snapshotConfig, jarIndex, cache, null));
+        }
+        if (scopes.contains(TranslationScope.PATCHOULI)) {
+            tasks.addAll(PatchouliTranslator.scan(paths, snapshotConfig, null));
+        }
+        if (scopes.contains(TranslationScope.MODS)) {
+            tasks.addAll(JarModExtractor.buildTasksFromIndex(paths, snapshotConfig, jarIndex, null));
+        }
+
+        Map<TranslationScope, Integer> filesByScope = new EnumMap<>(TranslationScope.class);
+        Map<TranslationScope, Integer> pendingByScope = new EnumMap<>(TranslationScope.class);
+        for (TranslationScope s : TranslationScope.values()) {
+            filesByScope.put(s, 0);
+            pendingByScope.put(s, 0);
+        }
+
+        Set<String> uniqueStrings = new LinkedHashSet<>();
+        Set<String> resolvedOriginals = new LinkedHashSet<>();
+        Map<String, MaskedText> toTranslate = new LinkedHashMap<>();
+        int[] glossaryHits = {0};
+        long[] totalPendingChars = {0L};
+
+        for (PendingOutputTask task : tasks) {
+            filesByScope.merge(task.scope(), 1, Integer::sum);
+            task.collectStrings(s -> {
+                if (s == null || s.isBlank()) {
+                    return;
+                }
+                uniqueStrings.add(s);
+                if (resolvedOriginals.contains(s)) {
+                    return;
+                }
+                String cached = cache.get(s);
+                if (cached != null && !cached.isBlank()) {
+                    resolvedOriginals.add(s);
+                    return;
+                }
+                MaskedText masked = tokenMasker.mask(s);
+                if (!masked.hasTranslatableContent()) {
+                    resolvedOriginals.add(s);
+                    return;
+                }
+                String human = glossary.lookupPreservingOuterFormatting(s);
+                if (human != null && placeholdersMatch(masked, human)) {
+                    resolvedOriginals.add(s);
+                    glossaryHits[0]++;
+                    return;
+                }
+                String restored = cache.resolveTemplate(masked, tokenMasker);
+                if (restored != null) {
+                    resolvedOriginals.add(s);
+                    return;
+                }
+                String templateKey = masked.masked();
+                if (toTranslate.putIfAbsent(templateKey, masked) == null) {
+                    pendingByScope.merge(task.scope(), 1, Integer::sum);
+                    totalPendingChars[0] += templateKey.length();
+                }
+            });
+        }
+
+        List<List<Map.Entry<String, MaskedText>>> batches = buildAdaptiveBatches(
+                toTranslate, snapshotConfig.getBatchSize(), snapshotConfig.getMaxBatchChars());
+        // Rough token estimate: ~380 system/glossary prompt tokens per batch + ~2.2x string chars / 4 (input + output)
+        long estimatedTokens = batches.isEmpty()
+                ? 0L
+                : (batches.size() * 380L) + Math.round((totalPendingChars[0] / 3.8) * 2.2);
+
+        ModpackScanSummary summary = new ModpackScanSummary(
+                filesByScope,
+                pendingByScope,
+                uniqueStrings.size(),
+                Math.max(0, resolvedOriginals.size() - glossaryHits[0]),
+                glossaryHits[0],
+                toTranslate.size(),
+                batches.size(),
+                estimatedTokens);
+        this.latestScanSummary = summary;
+        return summary;
+    }
+
+    /**
+     * Runs {@link #scanPreviewSynchronously} on a background thread and invokes {@code onSuccess} /
+     * {@code onFailure}.
+     */
+    public CompletableFuture<ModpackScanSummary> scanPreviewAsync(TranslatorConfigData config,
+                                                                  Consumer<ModpackScanSummary> onSuccess,
+                                                                  Consumer<String> onFailure) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return scanPreviewSynchronously(config);
+            } catch (IOException e) {
+                throw new RuntimeException(e.getMessage(), e);
+            }
+        }).whenComplete((res, err) -> {
+            if (err != null) {
+                Throwable cause = err.getCause() != null ? err.getCause() : err;
+                if (onFailure != null) {
+                    onFailure.accept(cause.getMessage());
+                }
+            } else if (onSuccess != null) {
+                onSuccess.accept(res);
+            }
+        });
     }
 
     /**
@@ -210,16 +359,13 @@ public final class TranslationService {
             }
 
             updateProgress(callback, new ProgressSnapshot(
-                    "Escaneando arquivos", "Iniciando varredura...", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0L, 0L, true, false));
+                    "Escaneando arquivos", "Iniciando varredura...", "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0L, 0L, -1L, true, false));
             log(callback, LogLevel.INFO, "Iniciando tradução (" + config.getProvider().displayName()
                     + " / " + config.effectiveModel() + " / Contexto: " + config.getContextPreset().displayName() + ")");
 
             cache.load();
 
             // Index mod jars once so KubeJS and Mods can share en_us/pt_br keys without duplicate translations.
-            // Always indexed: the official pt_br files shipped inside the jars feed the human-made glossary
-            // that every front (Quests, KubeJS, Patchouli, Mods) reuses before spending AI tokens.
-            // When the glossary is disabled, jars are only indexed for the fronts that need them.
             Map<String, JarModExtractor.NamespaceLangAccumulator> jarIndex = Map.of();
             if (config.isUseOfficialGlossary()
                     || scopes.contains(TranslationScope.MODS) || scopes.contains(TranslationScope.KUBEJS)) {
@@ -268,11 +414,20 @@ public final class TranslationService {
             Set<String> uniqueStrings = new LinkedHashSet<>();
             Set<String> alreadyQueuedOriginals = new LinkedHashSet<>();
             Map<String, MaskedText> toTranslate = new LinkedHashMap<>();
+            Map<String, TranslationScope> scopeByTemplate = new LinkedHashMap<>();
+            Map<String, String> displayPathByTemplate = new LinkedHashMap<>();
             Map<String, List<Map.Entry<String, MaskedText>>> originalsByTemplate = new LinkedHashMap<>();
+            Map<TranslationScope, Integer> filesByScope = new EnumMap<>(TranslationScope.class);
+            Map<TranslationScope, Integer> pendingByScope = new EnumMap<>(TranslationScope.class);
+            for (TranslationScope s : TranslationScope.values()) {
+                filesByScope.put(s, 0);
+                pendingByScope.put(s, 0);
+            }
             taskCompleted = new boolean[tasks.size()];
             int[] glossaryHits = {0};
 
             for (PendingOutputTask task : tasks) {
+                filesByScope.merge(task.scope(), 1, Integer::sum);
                 Set<String> pendingForTask = new LinkedHashSet<>();
                 task.collectStrings(s -> {
                     if (s == null || s.isBlank()) {
@@ -308,7 +463,11 @@ public final class TranslationService {
                         resolvedTranslations.put(s, restored);
                         return;
                     }
-                    toTranslate.putIfAbsent(templateKey, masked);
+                    if (toTranslate.putIfAbsent(templateKey, masked) == null) {
+                        scopeByTemplate.put(templateKey, task.scope());
+                        displayPathByTemplate.put(templateKey, task.displayPath());
+                        pendingByScope.merge(task.scope(), 1, Integer::sum);
+                    }
                     originalsByTemplate
                             .computeIfAbsent(templateKey, k -> new ArrayList<>(1))
                             .add(Map.entry(s, masked));
@@ -341,32 +500,65 @@ public final class TranslationService {
             }
 
             List<List<Map.Entry<String, MaskedText>>> batches = buildAdaptiveBatches(
-                toTranslate, config.getBatchSize(), config.getMaxBatchChars());
+                    toTranslate, config.getBatchSize(), config.getMaxBatchChars());
             int batchTotal = batches.size();
             int stringsTotal = toTranslate.size();
+
+            this.latestScanSummary = new ModpackScanSummary(
+                    filesByScope,
+                    pendingByScope,
+                    uniqueStrings.size(),
+                    Math.max(0, stringsFromCache - stringsFromGlossary),
+                    stringsFromGlossary,
+                    stringsTotal,
+                    batchTotal,
+                    0L);
 
             log(callback, LogLevel.INFO, "Strings únicas: " + uniqueStrings.size()
                     + " | Já resolvidas/Cache: " + stringsFromCache
                     + (stringsFromGlossary > 0 ? " (glossário oficial: " + stringsFromGlossary + ")" : "")
                     + " | Templates p/ traduzir: " + stringsTotal + " em " + batchTotal + " lote(s).");
 
+            // Track whether there are incomplete FTB Quests tasks so we can notify the client as soon as all quests finish
+            boolean hadPendingQuestTasks = false;
+            for (int tIdx = 0; tIdx < tasks.size(); tIdx++) {
+                if (!taskCompleted[tIdx] && tasks.get(tIdx).scope() == TranslationScope.FTBQUESTS) {
+                    hadPendingQuestTasks = true;
+                    break;
+                }
+            }
+            boolean questsCheckpointNotified = false;
+
             // Phase 2: Translate uncached batches with AI and flush completed files after every batch
             if (!batches.isEmpty()) {
                 AiTranslationClient client = TranslationClientFactory.create(config, callback, tokenUsage);
                 String systemPrompt = PromptBuilder.buildSystemPrompt(config);
                 int consecutiveBatchFailures = 0;
+                long phase2StartMillis = System.currentTimeMillis();
 
                 for (int bIdx = 0; bIdx < batches.size(); bIdx++) {
                     token.checkpoint();
                     List<Map.Entry<String, MaskedText>> batchEntries = batches.get(bIdx);
                     int currentBatchNum = bIdx + 1;
 
+                    String firstKey = batchEntries.get(0).getKey();
+                    TranslationScope batchScope = scopeByTemplate.getOrDefault(firstKey, TranslationScope.MODS);
+                    String batchScopeLabel = batchScope.displayName();
+                    String batchFileHint = displayPathByTemplate.getOrDefault(firstKey, "");
+                    long etaSec = computeEtaSeconds(phase2StartMillis, bIdx, batchTotal);
+
+                    String statusDetail = "[" + batchScopeLabel + "] Lote " + currentBatchNum + "/" + batchTotal
+                            + " (" + batchEntries.size() + " textos)"
+                            + (batchFileHint.isEmpty() ? "" : " · " + batchFileHint);
+
                     updateProgress(callback, new ProgressSnapshot(
-                            "Traduzindo com IA",
-                            "Lote " + currentBatchNum + "/" + batchTotal + " (" + batchEntries.size() + " textos)",
+                            "Traduzindo " + batchScopeLabel,
+                            statusDetail,
+                            batchScopeLabel,
                             currentBatchNum, batchTotal, stringsTotal,
                             stringsTranslated + stringsFailed, stringsFromCache, stringsFromGlossary, stringsFailed,
-                            tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), true, token.isPaused()));
+                            tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(),
+                            etaSec, true, token.isPaused()));
 
                     List<String> batchTexts = new ArrayList<>(batchEntries.size());
                     for (Map.Entry<String, MaskedText> be : batchEntries) {
@@ -439,16 +631,19 @@ public final class TranslationService {
                     // Periodically flush SHA-256 cache (every 10 batches or 30 seconds) to prevent disk thrashing
                     cache.flushIfDueAfterBatch();
 
-                    // Flush any file whose strings are now 100% ready
+                    // Flush any file whose strings are now 100% ready (plus partial FTB Quests flushes every 5 batches)
                     boolean newPackFileWritten = false;
+                    boolean partialQuestFlushed = false;
+                    boolean anyQuestTaskStillPending = false;
+
                     for (int tIdx = 0; tIdx < tasks.size(); tIdx++) {
                         if (taskCompleted[tIdx]) {
                             continue;
                         }
+                        PendingOutputTask task = tasks.get(tIdx);
                         Set<String> pending = taskPendingStrings.get(tIdx);
                         pending.removeIf(resolvedTranslations::containsKey);
                         if (pending.isEmpty()) {
-                            PendingOutputTask task = tasks.get(tIdx);
                             task.writeOutput(src -> resolvedTranslations.getOrDefault(src, src));
                             taskCompleted[tIdx] = true;
                             tasksWritten++;
@@ -459,19 +654,42 @@ public final class TranslationService {
                                 resourcePackChanged = true;
                                 newPackFileWritten = true;
                             }
+                        } else if (task.scope() == TranslationScope.FTBQUESTS) {
+                            anyQuestTaskStillPending = true;
+                            if (currentBatchNum % QUESTS_PARTIAL_FLUSH_BATCH_INTERVAL == 0) {
+                                task.writeOutput(src -> resolvedTranslations.getOrDefault(src, src));
+                                questsChanged = true;
+                                partialQuestFlushed = true;
+                            }
                         }
                     }
                     if (newPackFileWritten) {
                         ResourcePackGenerator.ensurePackMcmeta(paths);
                     }
+                    // If all FTB Quests tasks just completed (and other fronts like MODS are still running),
+                    // notify the client so it can reload FTB Quests immediately in-game!
+                    if (hadPendingQuestTasks && !anyQuestTaskStillPending && !questsCheckpointNotified
+                            && currentBatchNum < batchTotal) {
+                        questsCheckpointNotified = true;
+                        log(callback, LogLevel.INFO,
+                                "Todas as missões do FTB Quests foram traduzidas e gravadas! Aplicando no jogo...");
+                        if (callback != null) {
+                            callback.onPartialCheckpoint(true, false);
+                        }
+                    } else if (partialQuestFlushed && callback != null) {
+                        callback.onPartialCheckpoint(true, false);
+                    }
 
+                    long etaAfter = computeEtaSeconds(phase2StartMillis, currentBatchNum, batchTotal);
                     updateProgress(callback, new ProgressSnapshot(
-                            "Traduzindo com IA",
-                            "Lote " + currentBatchNum + "/" + batchTotal + " concluído ("
-                                    + (stringsTranslated + stringsFailed) + "/" + stringsTotal + " strings)",
+                            "Traduzindo " + batchScopeLabel,
+                            "[" + batchScopeLabel + "] Lote " + currentBatchNum + "/" + batchTotal + " concluído ("
+                                    + (stringsTranslated + stringsFailed) + "/" + stringsTotal + " textos)",
+                            batchScopeLabel,
                             currentBatchNum, batchTotal, stringsTotal,
                             stringsTranslated + stringsFailed, stringsFromCache, stringsFromGlossary, stringsFailed,
-                            tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), true, token.isPaused()));
+                            tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(),
+                            etaAfter, true, token.isPaused()));
                 }
             }
 
@@ -485,9 +703,10 @@ public final class TranslationService {
                 updateProgress(callback, new ProgressSnapshot(
                         "Gravando arquivos",
                         task.displayPath(),
+                        task.scope().displayName(),
                         batchTotal, batchTotal, stringsTotal,
                         stringsTranslated + stringsFailed, stringsFromCache, stringsFromGlossary, stringsFailed,
-                        tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), true, token.isPaused()));
+                        tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), 0L, true, token.isPaused()));
 
                 task.writeOutput(src -> resolvedTranslations.getOrDefault(src, src));
                 taskCompleted[tIdx] = true;
@@ -526,9 +745,9 @@ public final class TranslationService {
                     questsChanged, resourcePackChanged, duration);
 
             updateProgress(callback, new ProgressSnapshot(
-                    "Concluído", summary, batchTotal, batchTotal, stringsTotal,
+                    "Concluído", summary, "", batchTotal, batchTotal, stringsTotal,
                     stringsTranslated + stringsFailed, stringsFromCache, stringsFromGlossary, stringsFailed,
-                    tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), false, false));
+                    tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), -1L, false, false));
 
             if (callback != null) {
                 callback.onComplete(report);
@@ -569,8 +788,8 @@ public final class TranslationService {
                     stringsTranslated, stringsFromCache, stringsFailed,
                     questsChanged, resourcePackChanged, duration);
             updateProgress(callback, new ProgressSnapshot(
-                    "Cancelado", msg, 0, 0, 0, stringsTranslated, stringsFromCache, stringsFromGlossary, stringsFailed,
-                    tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), false, false));
+                    "Cancelado", msg, "", 0, 0, 0, stringsTranslated, stringsFromCache, stringsFromGlossary, stringsFailed,
+                    tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), -1L, false, false));
             if (callback != null) {
                 callback.onComplete(report);
             }
@@ -604,8 +823,8 @@ public final class TranslationService {
             String msg = "Erro durante a tradução: " + ex.getMessage();
             log(callback, LogLevel.ERROR, msg);
             updateProgress(callback, new ProgressSnapshot(
-                    "Erro", msg, 0, 0, 0, stringsTranslated, stringsFromCache, stringsFromGlossary, stringsFailed,
-                    tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), false, false));
+                    "Erro", msg, "", 0, 0, 0, stringsTranslated, stringsFromCache, stringsFromGlossary, stringsFailed,
+                    tasksTotal, tasksWritten, tokenUsage.input(), tokenUsage.output(), -1L, false, false));
             if (callback != null) {
                 callback.onError(msg, ex);
             }
@@ -621,6 +840,16 @@ public final class TranslationService {
             activeCache.set(null);
             activeToken.set(null);
         }
+    }
+
+    private static long computeEtaSeconds(long phase2StartMillis, int completedBatches, int totalBatches) {
+        if (completedBatches <= 0 || completedBatches >= totalBatches) {
+            return -1L;
+        }
+        long elapsedMs = Math.max(1L, System.currentTimeMillis() - phase2StartMillis);
+        long remainingBatches = totalBatches - completedBatches;
+        long etaMs = (elapsedMs * remainingBatches) / completedBatches;
+        return Math.max(1L, Math.round(etaMs / 1000.0));
     }
 
     /**
@@ -733,6 +962,7 @@ public final class TranslationService {
             TranslationBundleManager.ResetResult result =
                     TranslationBundleManager.resetTranslations(paths, targetLanguage);
             this.latestSnapshot = ProgressSnapshot.idle();
+            this.latestScanSummary = null;
             return result;
         } finally {
             activeToken.compareAndSet(resetGuard, null);
@@ -762,7 +992,7 @@ public final class TranslationService {
         if (items.isEmpty()) {
             return batches;
         }
-        int shortItemCap = Math.max(configuredBatchSize, 80);
+        int shortItemCap = configuredBatchSize >= 40 ? Math.max(configuredBatchSize, 80) : Math.max(1, configuredBatchSize);
         int longItemCap = Math.min(configuredBatchSize, 25);
         int effectiveCharCap = Math.min(maxCharsPerBatch, 4200);
 

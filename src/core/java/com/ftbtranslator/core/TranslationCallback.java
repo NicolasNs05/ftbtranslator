@@ -13,6 +13,13 @@ public interface TranslationCallback {
     /** Human-readable log line in Portuguese. */
     void onLog(LogLevel level, String message);
 
+    /**
+     * Optional notification fired during a run when an entire priority front (such as FTB Quests) finishes
+     * writing its files so the client can reload quests immediately while other fronts keep running.
+     */
+    default void onPartialCheckpoint(boolean questsUpdated, boolean resourcePackUpdated) {
+    }
+
     /** The run finished (successfully, partially or cancelled). */
     void onComplete(TranslationReport report);
 

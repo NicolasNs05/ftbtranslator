@@ -59,6 +59,10 @@ começando pelo tipo: `feat:` (recurso), `fix:` (correção), `perf:`, `docs:`, 
 - **Testes:** `./gradlew coreTest` (Windows: `.\gradlew.bat coreTest`) roda a suíte do core sem o jogo.
   Todo recurso ou correção no core deve vir com teste em `src/coreTest`.
 - **Textos para o jogador** (interface, tooltips, logs visíveis) em **português do Brasil**.
+- **Config compatível com versões antigas:** toda chave nova do `ftbtranslator-client.toml` precisa funcionar quando
+  o jogador já tem o arquivo de uma versão anterior (a chave nova vem ausente/`null`). Não use `List.of(...)` como
+  lista de valores aceitos de `defineInList`/validadores: `contains(null)` lança exceção, o mod falha ao carregar e o
+  NeoForge desliga os recursos de **todos** os mods (foi o travamento corrigido na `v0.2.1`).
 
 ## 3. Fluxo de Git
 

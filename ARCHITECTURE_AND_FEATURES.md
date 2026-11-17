@@ -1,7 +1,7 @@
 # Universal Modpack & Quests Auto-Translator (`ftbtranslator`) — Arquitetura e Funcionalidades
 
 > [!NOTE]
-> **Mod ID:** `ftbtranslator` | **Versão:** `0.2.0` (em desenvolvimento) | **Java:** `21` | **Loader Atual:** `NeoForge 1.21 / 1.21.1` (Arquitetura Multi-Loader Desacoplada pronta para Fabric, Quilt e Forge).
+> **Mod ID:** `ftbtranslator` | **Versão:** `0.5.0` em desenvolvimento (última release: `v0.4.0`) | **Java:** `21` | **Loader Atual:** `NeoForge 1.21 / 1.21.1` (Arquitetura Multi-Loader Desacoplada pronta para Fabric, Quilt e Forge).
 
 O **Universal Modpack & Quests Auto-Translator** é um mod *Client-Side* projetado para traduzir automaticamente qualquer modpack de Minecraft (de Inglês, Japonês, Chinês, Vietnamita, Coreano, etc.) para **Português do Brasil (`pt_br`)**, cobrindo **FTB Quests**, **KubeJS / Paxi / OpenLoader**, **Mods (`.jar` e sub-mods aninhados)** e **Livros de Guia do Patchouli**, além de permitir exportar e importar todas as traduções em um pacote `.zip` compartilhável sem necessidade de API Key para quem recebe.
 
@@ -70,8 +70,11 @@ Todas as linhas abaixo respeitam o limite máximo de 85 colunas para leitura e e
 
 ```text
 ftbtranslator/
-├── build.gradle                           # NeoGradle 1.21.1 + sourceSets.core
-├── gradle.properties                      # Java 21, NeoForge 21.1.219 e IDs
+├── .github/workflows/build.yml            # CI: build, testes, artefato e Release
+├── AGENTS.md                              # Regras do projeto para IAs e humanos
+├── CLAUDE.md / GEMINI.md                  # Apontam para o AGENTS.md
+├── build.gradle                           # ModDevGradle 1.21.1 + sourceSets.core
+├── gradle.properties                      # Java 21, NeoForge 21.1.x e mod_version
 ├── ARCHITECTURE_AND_FEATURES.md           # Documentação técnica do projeto
 ├── src/
 │   ├── core/java/com/ftbtranslator/core/  # CAMADA CORE (100% Java 21 + Gson)
@@ -80,6 +83,7 @@ ftbtranslator/
 │   │   ├── ContextPreset.java             # Presets (DEFAULT, TENSURA, TECH...)
 │   │   ├── GamePaths.java                 # Caminhos da instância e detecção
 │   │   ├── LogLevel.java                  # Níveis de log (INFO, WARN, ERROR)
+│   │   ├── ModpackScanSummary.java        # Raio-X: prévia sem gastar tokens
 │   │   ├── ProgressSnapshot.java          # Estado em tempo real para a GUI
 │   │   ├── ProviderType.java              # Provedores (Gemini, Groq, Ollama...)
 │   │   ├── TranslationCallback.java       # Interface assíncrona Core -> UI
@@ -95,13 +99,16 @@ ftbtranslator/
 │   │   │   ├── HttpRetryHelper.java       # Retry HTTP com Exponential Backoff
 │   │   │   ├── OpenAiCompatibleClient.java# Cliente REST /v1/chat/completions
 │   │   │   ├── PromptBuilder.java         # System Prompt enxuto e payload JSON
-│   │   │   ├── RateLimiter.java           # Limitador RPM de janela deslizante
+│   │   │   ├── RateLimiter.java           # Limite RPM automático ou manual
+│   │   │   ├── TokenUsage.java            # Contagem de tokens por provedor
 │   │   │   └── TranslationClientFactory.java # Fábrica de clientes por provedor
 │   │   ├── bundle/
 │   │   │   └── TranslationBundleManager.java # Export/Import .zip anti-ZipSlip
 │   │   ├── cache/
 │   │   │   ├── TranslationCache.java      # Cache SHA-256 contextual + flush
 │   │   │   └── TranslationGlossary.java   # Glossário de traduções oficiais
+│   │   ├── editor/
+│   │   │   └── TranslationOverrideManager.java # Correções manuais no jogo
 │   │   ├── pack/
 │   │   │   └── ResourcePackGenerator.java # Gerador pack.mcmeta (format 15..99)
 │   │   ├── parser/
@@ -121,7 +128,10 @@ ftbtranslator/
 │   │   ├── ResourcePackApplier.java       # Ativação automática do ResourcePack
 │   │   ├── TranslatorCommands.java        # Comandos /ftbtranslate (Brigadier)
 │   │   └── gui/
-│   │       ├── TranslatorDashboardScreen.java # Painel gráfico principal (F9)
+│   │       ├── TranslatorDashboardScreen.java # Painel em 4 abas (F9)
+│   │       ├── TranslationEditorScreen.java # Editor de traduções no jogo
+│   │       ├── TranslationHudOverlay.java # Barra de progresso no HUD
+│   │       ├── ResetConfirmScreen.java    # Confirmação do reset total
 │   │       └── ApiKeyGuideScreen.java     # Guia passo a passo de API Key
 │   └── coreTest/java/com/ftbtranslator/core/
 │       └── EndToEndCoreTest.java          # Testes JUnit 5 de ponta a ponta
@@ -233,9 +243,14 @@ Antes de qualquer string ser enviada para a IA, [`TokenMasker.mask(String)`](src
 
 ## 6. Interface Gráfica (GUI), Comandos e Sistema de Bundle (`.zip`)
 
-* **Atalho `F9` e Menu `Mods -> Config` ([`TranslatorDashboardScreen`](src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java)):** Permite alternar provedor (`Google Gemini`, `Groq`, `OpenRouter`, `OpenAI`, `Ollama Local`), colar/testar a API Key, abrir o guia passo a passo ([`ApiKeyGuideScreen`](src/main/java/com/ftbtranslator/neoforge/gui/ApiKeyGuideScreen.java)), ativar/desativar as 4 frentes, escolher o Contexto (`Padrão` por default, ou `Tensura` auto-detectado quando o mod Tensura está presente), pausar/retomar/cancelar com trava de segurança dos botões de configuração durante a execução, e acionar **Exportar** / **Importar**.
+* **Atalho `F9` e Menu `Mods -> Config` ([`TranslatorDashboardScreen`](src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java)):** painel em 4 abas com *tooltips* em linguagem simples (detalhes na seção 8.1):
+  * **Início:** atalhos de configuração em 1 clique quando falta a API Key, **Raio-X** do modpack, métricas (Cache / Glossário / IA / Falhas / Tokens), contexto, barra no HUD, botões Iniciar / Pausar ou Tentar falhas / Cancelar / Aplicar e o **✏ Editor de Traduções**.
+  * **Conteúdo:** frentes, *Delta Translation*, filtro de mods com contador e prompt customizado.
+  * **IA & Glossário:** provedor (`Google Gemini`, `Anthropic Claude`, `Groq`, `OpenRouter`, `OpenAI`, `Ollama Local`), API Key, modelo, teste de conexão, guia de chave ([`ApiKeyGuideScreen`](src/main/java/com/ftbtranslator/neoforge/gui/ApiKeyGuideScreen.java)), limite automático/manual e glossário oficial.
+  * **Pacotes (.zip):** exportar, importar, abrir a pasta `exports/` e **resetar tudo** (com tela de confirmação, [`ResetConfirmScreen`](src/main/java/com/ftbtranslator/neoforge/gui/ResetConfirmScreen.java)).
+  * Os controles de configuração ficam travados enquanto uma tradução (ou teste de conexão) está rodando.
 * **Bundle Compartilhável (`exports/Traducao_Modpack_PTBR.zip`):** Compacta e importa todas as traduções e o Resource Pack `AutoTranslated_Pack_PTBR` com validação anti-*Zip-Slip* e recarregamento automático sem precisar de API Key.
-* **Comandos Client-Side (`/ftbtranslate`):** Subcomandos `start [all|quests|kubejs|mods|patchouli]`, `pause`, `cancel`, `status`, `reload`, `export` e `import [caminho]`.
+* **Comandos Client-Side (`/ftbtranslate`):** `gui`, `start [all|quests|kubejs|mods|patchouli]`, `status`, `cancel`, `apply`, `reset`, `export`, `import`, `apikey <chave>` e `context <perfil>`.
 
 ---
 
@@ -251,9 +266,24 @@ O workflow [`.github/workflows/build.yml`](.github/workflows/build.yml) compila 
 * **Download do `.jar`:** aba **Actions** do repositório → execução desejada → seção **Artifacts** (`ftbtranslator-<versão>-build.<n>-<commit>`; o `.jar` fica disponível por 30 dias).
 * **Release:** ao enviar uma tag de versão (`git tag v1.0.1` + `git push origin v1.0.1`), o workflow compila com essa versão (`-Pmod_version=1.0.1`) e cria uma **Release** no GitHub com o `.jar` anexado e notas geradas automaticamente.
 * Se os testes falharem, o relatório (`build/reports/tests/`) é publicado como artefato para análise.
+* **Testes na esteira:** `./gradlew test` e `./gradlew build` também executam a suíte `coreTest` (25 testes de ponta a ponta do core na `v0.4.0`).
 * **Versionamento:** Versionamento Semântico; série `0.x` até o lançamento público (`1.0.0`). Tags `v0.*` e com sufixo (`-beta.N`, `-rc.N`) viram *Pre-release*. Regras completas em [`AGENTS.md`](AGENTS.md).
 
-## 8. Roadmap de Evolução Futura (Próximas Etapas Planejadas)
+## 7.2. Histórico de Versões
+
+| Versão | Tipo | Principais entregas |
+|---|---|---|
+| `v0.1.0` | Primeira base | Glossário oficial dos mods, import seguro, cache sem duplicidade, painel em abas com tooltips, provedor Claude, limite automático, medição de tokens, barra no HUD, CI no GitHub Actions e regras de versionamento (PRs #1 a #6). |
+| `v0.2.0` | MENOR | Falhas listadas no log, botão **Tentar falhas**, correção do *Delta* que impedia reenviar falhas, resposta enxuta no Claude e `claudeEffort` configurável (PR #7). |
+| `v0.2.1` | CORREÇÃO | Travamento ao abrir o jogo com config antiga: a validação de `claudeEffort` chamava `contains(null)` numa lista imutável; o mod falhava ao carregar e o NeoForge pulava os recursos de todos os mods. |
+| `v0.3.0` | MENOR | Reset total (botão e `/ftbtranslate reset`) com tela de confirmação, `gradlew test` ligado ao `coreTest` e 5 testes novos (divisão de lotes, pausa/cancelamento, espera após 404 do Gemini, lotes adaptativos e anti-*Zip-Slip*). |
+| `v0.4.0` | MENOR | Configuração em 1 clique, **Raio-X** do modpack, recarga incremental das missões, **Editor de Traduções** no jogo e mais controles no painel (modelo, prompt customizado). |
+
+As notas completas de cada versão ficam nas **Releases** do GitHub, geradas a partir dos títulos dos PRs.
+
+---
+
+## 8. Evolução Implementada e Roadmap
 
 ### 8.1. Reformulação de UX/UI Orientada ao Usuário Leigo
 * **Implementado — Painel em Abas com Tooltips:** a [`TranslatorDashboardScreen`](src/main/java/com/ftbtranslator/neoforge/gui/TranslatorDashboardScreen.java) foi dividida em 4 abas, todas com *Hover Tooltips* em linguagem simples:
@@ -281,7 +311,26 @@ O workflow [`.github/workflows/build.yml`](.github/workflows/build.yml) compila 
 * **Tentar falhas de novo:** depois de uma tradução com falhas, o botão de pausa da aba Início vira **"Tentar falhas"**. Como textos rejeitados não entram no cache e o *Delta Translation* passou a ignorar valores gerados idênticos ao texto original (`JarModExtractor.isUntranslatedCopy`, usado também pelo KubeJS), só as falhas voltam para a IA.
 * **Claude mais econômico:** resposta estruturada com um *schema* por lote (`{"0":"...","1":"..."}`, uma propriedade por texto) em vez de `{"translations":[{"id","text"}]}`, economizando ~10 tokens de saída por texto. O *effort* virou configurável (`claudeEffort`: `low`, `medium` padrão, `high`, `xhigh`, `max`).
 
+### 8.1.5. Reset Total (v0.3.0)
+* **Botão "Resetar tudo"** (aba Pacotes) e **`/ftbtranslate reset`** apagam o cache SHA-256 e todas as traduções geradas: o Resource Pack `AutoTranslated_Pack_PTBR`, o `pt_br.snbt` das missões, os `pt_br.json` do KubeJS/Paxi/OpenLoader e os livros do Patchouli gerados na pasta raiz. Os **backups originais** de capítulos do FTB Quests e de livros do Patchouli são **restaurados**.
+* A [`ResetConfirmScreen`](src/main/java/com/ftbtranslator/neoforge/gui/ResetConfirmScreen.java) explica o que será apagado antes de confirmar.
+
+### 8.1.6. Experiência do Jogador (v0.4.0)
+* **Configuração em 1 clique:** sem API Key, a aba Início mostra atalhos para o guia de chave gratuita e para a aba de IA.
+* **Raio-X do modpack** ([`ModpackScanSummary`](src/core/java/com/ftbtranslator/core/ModpackScanSummary.java), `TranslationService.scanPreviewAsync`): executa todas as etapas de varredura, cache e glossário **sem chamar a IA** e mostra, por frente, arquivos e textos pendentes, o que já está resolvido, quantos lotes seriam enviados e uma **estimativa de tokens**.
+* **Recarga incremental das missões:** `TranslationCallback.onPartialCheckpoint` avisa a camada NeoForge assim que as missões ficam prontas, e o mod executa `/ftbquests reload` sem esperar o fim da tradução.
+* **Editor de Traduções no jogo** ([`TranslationEditorScreen`](src/main/java/com/ftbtranslator/neoforge/gui/TranslationEditorScreen.java) + [`TranslationOverrideManager`](src/core/java/com/ftbtranslator/core/editor/TranslationOverrideManager.java)): busca qualquer texto traduzido (FTB Quests, KubeJS ou Mods) e permite corrigi-lo; a correção é gravada no arquivo gerado **e** no cache, então não é sobrescrita na próxima tradução.
+
 ### 8.2. Motor de Cache de Segunda Geração e Otimização Extrema de Tokens
 * **Implementado — Glossário Oficial:** os `pt_br.json` que os próprios mods já trazem (tradução humana) alimentam o [`TranslationGlossary`](src/core/java/com/ftbtranslator/core/cache/TranslationGlossary.java). Textos idênticos em qualquer frente são resolvidos sem IA (validando placeholders), e termos curtos encontrados no lote são injetados no prompt para manter a terminologia oficial. Arquivos `pt_br` que são só cópia do `en_us` são ignorados; divergências são resolvidas por votação.
 * **Implementado — Import seguro:** importar um bundle `.zip` é recusado enquanto uma tradução está rodando, evitando que o flush do cache em memória sobrescreva o cache importado.
-* Pesquisa e implementação de técnicas avançadas de aproveitamento de cache — incluindo pré-aquecimento de dicionários com termos recorrentes de mods de Minecraft, compressão de payload JSON em trânsito e armazenamento incremental — visando reduzir ainda mais o consumo de tokens de IA e acelerar drasticamente a primeira tradução de modpacks gigantes.
+* **Avaliado e descartado — armazenamento incremental do cache:** medido num modpack completo (~22 mil textos), o cache fica em torno de 3,5 MB; reescrevê-lo a cada 30 s custa milissegundos, então a complexidade de um log incremental não se paga.
+* **Avaliado e descartado — compressão do payload em trânsito:** reduz bytes, não tokens, que é o que os provedores cobram.
+
+### 8.3. Próximos Passos (ainda não implementados)
+* **Modelo por tipo de texto:** nomes curtos para um modelo barato e textos longos (missões, livros) para um modelo mais forte.
+* **Modo econômico com Batch API** dos provedores (desconto de 50% em troca de respostas em minutos/horas).
+* **Ollama:** aviso de uso da GPU local e "modo leve" com pausa entre lotes.
+* **Teste de compatibilidade de config:** carregar um `ftbtranslator-client.toml` de versão anterior, para pegar erros como o da `v0.2.1`.
+* **Esteira:** cobertura de testes, análise de segurança (CodeQL), atualização automática de dependências e *actions* fixadas por versão exata.
+* **Lançamento público `v1.0.0`** no CurseForge e no Modrinth, com publicação automática a partir da tag.
